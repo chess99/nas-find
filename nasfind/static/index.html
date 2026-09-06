@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NAS Find · 文件搜索</title><link rel="stylesheet" href="/style.css"><script defer src="/app.js"></script></head>
+<body>
+<header><a class="brand" href="/" aria-label="首页"><span class="brand-icon">N</span> NAS Find <span class="badge">PRIVATE</span></a><div class="header-right"><span id="connection">你的文件，触手可及</span><button id="logout" class="plain hidden">退出</button></div></header>
+<main>
+<section id="login" class="login hidden"><div class="eyebrow">YOUR PERSONAL FILE LIBRARY</div><h1>文件在 NAS，<br>查找就在这里。</h1><p>输入访问密码，搜索并查看你的文件。</p><form id="login-form"><label for="password">访问密码</label><div class="login-input"><input id="password" type="password" autocomplete="current-password" required autofocus><button type="submit" class="primary">进入</button></div><p id="login-error" class="error" role="alert"></p></form></section>
+<section id="app" class="hidden">
+<div class="intro"><div><div class="eyebrow">A QUIETER WAY TO FIND</div><h1>找回你要的那份文件。</h1><p>输入文件名的任意片段，中文也可以。</p></div><div class="index-summary"><span class="status-dot" id="status-dot"></span><span id="index-summary">正在读取索引状态</span></div></div>
+<form id="search-form"><div class="search-box"><span aria-hidden="true" class="search-symbol">⌕</span><input id="query" aria-label="文件名关键词" placeholder="例如：项目报告、旅行、invoice…" autocomplete="off"><kbd>/</kbd><button class="primary" type="submit">搜索</button></div><div class="filters"><label>目录范围 <input id="scope" placeholder="全部目录" aria-label="目录范围"></label><label>扩展名 <select id="extension"><option value="">所有类型</option><option>pdf</option><option>docx</option><option>xlsx</option><option>md</option><option>txt</option><option>jpg</option><option>png</option><option>mp4</option><option>mkv</option><option>mp3</option><option>zip</option></select></label><button id="clear-filters" class="plain" type="button">重置筛选</button><span class="hint">多个关键词用空格分隔</span></div></form>
+<div id="notice" class="notice hidden" role="status"></div>
+<div class="results-heading"><strong id="result-count">准备好开始搜索</strong><span id="query-time"></span></div>
+<div id="empty" class="empty"><div class="empty-icon">⌕</div><h2 id="empty-title">从一个关键词开始</h2><p id="empty-body">文件正文不会被全文扫描。只在你打开预览时读取文件。</p></div>
+<div id="results" class="results" aria-live="polite"></div>
+<footer><span id="updated">正在连接…</span><div><button id="settings" class="plain">索引范围</button><button id="refresh" class="plain">刷新索引</button></div></footer>
+<section id="exclusions" class="exclusions hidden"><h3>不纳入搜索的目录</h3><p id="excluded-names"></p><p id="excluded-paths"></p><p>无文件名变化时不启动常规扫描。重启后校验，并每周进行一次兜底校验。</p></section>
+</section>
+</main>
+<dialog id="preview"><div class="preview-header"><div><small>文件预览</small><h2 id="preview-title"></h2></div><button id="close-preview" class="icon-button" aria-label="关闭预览">×</button></div><p id="preview-path" class="file-path"></p><div class="preview-actions"><a id="download" class="primary" download>下载文件</a><button id="copy-preview" class="secondary">复制 Windows 路径</button><span id="file-meta"></span></div><div id="preview-content"></div></dialog>
+<div id="toast" class="toast hidden" role="status"></div>
+</body></html>
