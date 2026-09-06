@@ -1,0 +1,151 @@
+# Windows 客户端可行性与推荐方案
+
+调研日期：2026-09-06。结论：采用 Tauri 2、本地打包前端、Rust 系统接口层，复用现有 NAS Find 搜索 API。用户提出的双击默认应用打开、资源管理器定位、UNC / 映射盘路径、常用右键菜单均可实现；截图中的完整 Windows Shell 菜单也有实现路径，但需要独立兼容性验证。
+
+本文是方案研究，不代表客户端已经实现。本次未安装开发工具、注册协议或变更 NAS 服务。
+
+## 1. 浏览器限制与桌面客户端的作用
+
+普通 HTTP 网页不能可靠地直接启动资源管理器、调用任意文件的默认应用或嵌入 Windows Shell 菜单。通过自定义协议和本地助手可以补上“打开”能力，但仍需要安装软件，浏览器可能提示确认，键盘、多选、拖放和系统菜单的衔接也更零散。安装 PWA 本身不会获得这些完整能力。
+
+Tauri 提供本地程序入口。Windows 已负责 SMB 文件系统、登录凭据和文件关联，客户端无需另写 Samba 下载器。客户端将搜索结果转换成 Windows 路径，再把路径交给系统。
+
+例如，服务返回相对路径 `资料/财报.xlsx`：
+
+- 映射盘模式：`Z:\资料\财报.xlsx`。
+- UNC 模式：`\\192.168.0.104\Disk1\资料\财报.xlsx`。
+
+本次通过 Windows 映射信息核实：`Z:` 当前连接 `\\192.168.0.104\Disk1`，状态为 OK。
+
+打开时使用用户已注册的默认应用，例如 Excel、WPS 或文本编辑器。应用通过 SMB 读取原文件，正常保存时也写回原文件，受 Samba 权限控制；这与网页下载副本不同。个别应用不支持 UNC，映射盘可改善兼容性，但无法保证所有应用都支持网络文件。
+
+## 2. 可实现范围
+
+| 能力 | 可行性与实现路径 | 边界 |
+|---|---|---|
+| 双击 / Enter 打开文件 | Tauri 官方 opener，必要时 Win32 `ShellExecuteExW` | 使用系统关联；文件不存在、共享离线或没有关联时需显示明确错误 |
+| 双击目录 | 把目录路径交给系统文件浏览器 | 默认打开资源管理器；客户端内筛选该目录可另设快捷键 |
+| 打开所在目录并选中文件 | 官方 opener 的 reveal；底层可用 `SHOpenFolderAndSelectItems` | NAS 离线、路径过长和特殊名称需实测 |
+| 常用右键菜单 | Tauri 原生 `Menu.popup` | 菜单项由我们定义，不会自动包含 Bandizip 等扩展 |
+| 打开方式 | `SHOpenWithDialog` | 可选择应用打开单文件；现代 Windows 的默认关联修改走系统设置 |
+| 复制路径 | 文本剪贴板 | 同时提供映射路径与 UNC 路径 |
+| 复制文件后在资源管理器粘贴 | Windows `CF_HDROP` 文件列表或 Shell `IDataObject` | 与复制文本不同；目标程序开始粘贴时才读取文件内容 |
+| 完整系统右键菜单 | `IContextMenu` / `IContextMenu2` / `IContextMenu3` | 第三方扩展是否出现、是否支持网络文件由扩展决定 |
+| 多选 | 前端选择状态 + 批量系统操作 | 常用操作容易支持跨目录；候选菜单库的多选限定同一父目录 |
+| 拖到资源管理器或其他应用 | Windows OLE 文件拖放 | 能做，但应独立开发验证；Tauri 的拖入事件不等于文件拖出能力 |
+| 托盘、全局快捷键、单实例 | Tauri 官方能力 / 插件 | 快捷键需允许用户配置，避免与 Everything 冲突 |
+| 文件类型图标 | Windows 文件关联图标，按扩展名缓存 | 默认不取逐文件缩略图或远端图标 |
+| 大小、修改时间、按这些字段全局排序 | 需要额外元数据设计 | plocate 当前仅索引路径，不能仅靠换客户端得到这些字段 |
+
+## 3. 两类右键菜单需要区别对待
+
+用户截图上部的打开、打开目录、复制路径属于常用操作；下部的压缩、打开方式、发送到、属性等涉及系统和第三方 Shell 扩展。
+
+推荐第一版的右键菜单提供：
+
+- 打开。
+- 打开所在目录并选中。
+- 打开方式。
+- 复制文件、复制完整路径、复制 UNC 路径。
+- 属性。
+- 系统右键菜单……（兼容性验证通过后启用）。
+
+可以把系统菜单设为默认右键行为，但建议先保留这个按需入口：Shell 扩展可能访问 NAS、耗时或出现兼容性问题；自定义常用菜单可以迅速弹出，搜索列表也不必等待扩展加载。
+
+`IContextMenu` 是成熟 Windows 接口，通常对应经典菜单。不能保证复刻 Windows 11 新版精简菜单，也不能承诺所有第三方菜单项与资源管理器完全一致。某些扩展依赖 Explorer 宿主、进程位数、选中对象类型或额外服务。
+
+系统菜单可能含删除、重命名、剪切等会修改 NAS 的操作。即使搜索服务保持只读，这些操作仍会通过 SMB 执行；网络删除的恢复能力取决于 Samba 回收站等实际配置，不能假定进入本机回收站。
+
+## 4. 现成组件与选择
+
+| 组件 | 用途 | 评估 |
+|---|---|---|
+| Tauri 2 官方 opener | 默认应用打开、定位文件 | 优先采用，Windows 支持在官方文档中明确列出 |
+| Tauri 原生 Menu API | 常用右键菜单、快捷键 | 足够，无需为简单菜单额外引入第三方插件 |
+| Microsoft `windows` Rust 绑定 | 打开方式、属性、映射查询、文件剪贴板和 Shell 接口 | Windows 专属部分的基础 |
+| `win-context-menu` | 弹出真实 Windows 文件菜单 | 候选库，可用于验证后接入；需封装隔离，不能当作已验证依赖 |
+
+调研时 `win-context-menu` 在 crates.io 的版本为 0.1.4，MIT / Apache-2.0 双许可。其文档声明支持单文件、同目录多选、文件夹背景、扩展菜单以及 `IContextMenu2/3` 子菜单，并要求 STA 线程。
+
+阅读上游当前源代码后，还发现几项接入注意事项：
+
+- 解析文件前调用 `canonicalize`，随后调用 `SHParseDisplayName`，可能实际访问网络文件，因此不能对全部结果预先构造菜单。
+- 多选显式检查共同父目录，不支持直接传入跨目录搜索结果；第一版可对跨目录多选使用自定义菜单。
+- 当前消息转发分支处理 `WM_INITMENUPOPUP`、`WM_DRAWITEM`、`WM_MEASUREITEM`，未把 `WM_MENUCHAR` 纳入该分支；菜单键盘行为需要补查或修正。
+- 该库仍较早期，文档支持不等于在本机 Bandizip / Samba 环境中实测通过。正式采用时应锁定并复核发布版本，当前上游源码检查不能替代发布包审查。
+
+完整 Shell 菜单建议放在按需启动的辅助进程中，使用专用 STA 线程和消息循环。这样第三方扩展阻塞或崩溃时，主搜索窗口仍可使用。基础的打开、定位和普通菜单不需要为此引入复杂的进程架构。
+
+## 5. 推荐架构
+
+```text
+NAS：plocate + inotify + 现有搜索 API
+                       │ HTTP 查询结果，仅路径等轻量数据
+                       ▼
+Windows：Tauri 本地前端 ↔ Rust 请求与路径映射层
+                              │
+                              ├─ 默认应用：打开 Z:\… 或 \\192.168.0.104\Disk1\…
+                              ├─ 资源管理器：定位、选中
+                              └─ 按需 Shell 菜单辅助进程
+```
+
+前端文件随客户端打包；NAS 只返回数据。Rust 层负责请求现有 API、保持登录会话、映射路径和调用系统功能。这样可以复用当前搜索后端，且无需把远端网页直接授权为可以启动本机应用的界面。现有浏览器入口继续可用。
+
+现有网页使用同源 cookie 和 Origin 校验。桌面前端不能直接照搬其跨来源 fetch；由 Rust HTTP 客户端维护 NAS 会话，可以避免为桌面客户端放宽网页跨域策略。需处理会话失效后的重登录。持久化 NAS 登录凭据采用 Windows 凭据存储或用户绑定加密，SMB 凭据继续由 Windows 管理，两套登录相互独立。
+
+本机配置以 UNC 共享为身份、映射盘为可选首选路径：
+
+1. 默认使用当前的 `Z:`，查询映射时确认其指向配置的共享。
+2. 未映射或映射不同共享时，不把结果静默拼到错误的盘符上；提示并允许改用 UNC。
+3. 不对每一条结果调用文件存在检查；仅在用户打开、定位或预览时访问目标。
+4. 普通用户权限运行，保持与资源管理器相同登录会话，避免提升权限后看不到映射盘。
+5. Rust 层仅接收受限的相对路径和固定动作，拒绝路径越界、绝对路径注入、设备路径、备用数据流和任意命令。调用结构化 Windows API，不拼接 shell 命令。
+
+## 6. 保持“快且安静”需要的取舍
+
+搜索期间仍只读 NAS SSD 上的数据库；使用扩展名获取本机文件类型图标，`SHGetFileInfoW` 的 `SHGFI_USEFILEATTRIBUTES` 可避免访问指定文件。按扩展名缓存结果，不为每一行读取远程文件、缩略图或实际文件属性。
+
+预览改为显式操作。快速上下移动选择时，不自动读取每一个文件；打开或定位文件时的 SMB 连接和应用启动耗时也应与索引查询延迟分开显示和评估。
+
+当前 API 默认显示 100 条，最多 10,001 个候选。桌面版应明确提示截断，先做键盘导航和虚拟列表；进一步浏览大量结果需要后端的受限分页 / 查询快照设计。仅对已返回 100 条排序不是对所有命中结果排序。
+
+要增加大小、修改时间和对应全局排序，需要另外维护元数据；正文修改当前不会触发文件名索引更新，也就不会自动更新这些字段。建议第一版维持名称、路径、类型三列，属性面板按需读取大小与日期。
+
+NAS 上某些 Linux 文件名在 Windows / Samba 下可能无法直接表示，或被 Samba 映射成其他名称；另有超长路径、符号链接和应用网络路径兼容性问题。客户端应显示明确失败原因，浏览器下载可作为备用入口，不能无声地下载副本替代“打开原文件”。
+
+## 7. 与其他方案比较
+
+| 方案 | 适配本项目的判断 |
+|---|---|
+| Tauri 2 + Windows 接口层 | 推荐。可复用前端经验与搜索 API，基础桌面能力现成，Shell 部分按需补齐 |
+| C# WPF / WinForms | 如果以后要做深度 Windows 文件管理器，值得优先考虑；当前需要重新实现界面，完整 Shell 菜单也仍需互操作代码 |
+| Electron | 同样能完成基础功能，但完整文件菜单仍需 Windows 原生模块；本项目没有必须引入完整 Chromium / Node 运行时的需求 |
+| 网页 + 自定义协议助手 | 适合只增加“在本机打开”按钮；若需要搜索快捷键、多选和菜单，体验与维护会分散 |
+
+Tauri 使用 Windows WebView2，可生成安装包。客户端的安装包大小和内存应在实际构建后测量，不能拿 NAS Python 服务的 33 MiB 推断客户端占用，也不承诺达到 Everything 原生程序的资源水平。
+
+## 8. 实施顺序与验收
+
+第一阶段实现可日用客户端：紧凑结果表格、键盘操作、双击 / Enter、定位文件、路径配置、常用原生菜单、系统打开方式、文件复制、托盘和单实例。维护于同一个 `nas-find` 仓库的 `desktop/`，先复用现有服务器。
+
+第二阶段加入真实系统菜单。先验证单文件和同目录多选，包括本机 Bandizip、打开方式、属性和中文路径；再决定是否默认启用。跨目录多选和文件拖出作为单独功能扩展。
+
+验收应覆盖：中文和空格路径、UNC 与 Z: 两种方式、默认应用打开并在自有测试文件保存、Explorer 选中、剪贴板粘贴、共享断线、映射变化、文件已删除、中文输入法、菜单子项与键盘、多屏 DPI、Shell 扩展异常时主窗口可继续搜索，以及搜索空闲期间不增加 NAS 扫描。
+
+## 官方资料与候选项目
+
+- [Tauri Opener](https://v2.tauri.app/plugin/opener/)
+- [Tauri Menu API，含 popup](https://v2.tauri.app/reference/javascript/api/namespacemenu/)
+- [Tauri Capabilities 与远端权限](https://v2.tauri.app/security/capabilities/)
+- [Tauri Windows 安装与 WebView2](https://v2.tauri.app/distribute/windows-installer/)
+- [ShellExecuteExW](https://learn.microsoft.com/en-us/windows/win32/api/shellapi/nf-shellapi-shellexecuteexw)
+- [SHOpenFolderAndSelectItems](https://learn.microsoft.com/en-us/windows/win32/api/shlobj_core/nf-shlobj_core-shopenfolderandselectitems)
+- [SHOpenWithDialog](https://learn.microsoft.com/en-us/windows/win32/api/shlobj_core/nf-shlobj_core-shopenwithdialog)
+- [IContextMenu](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nn-shobjidl_core-icontextmenu)
+- [IShellFolder::GetUIObjectOf](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-ishellfolder-getuiobjectof)
+- [IContextMenu3](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nn-shobjidl_core-icontextmenu3)
+- [WNetGetConnectionW](https://learn.microsoft.com/en-us/windows/win32/api/winnetwk/nf-winnetwk-wnetgetconnectionw)
+- [SHGetFileInfoW](https://learn.microsoft.com/en-us/windows/win32/api/shellapi/nf-shellapi-shgetfileinfow)
+- [Windows Shell 剪贴板格式](https://learn.microsoft.com/en-us/windows/win32/shell/clipboard)
+- [win-context-menu 源码与说明](https://github.com/cignoir/win-context-menu)
+- [win-context-menu 发布版本](https://crates.io/crates/win-context-menu)

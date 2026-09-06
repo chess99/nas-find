@@ -2,6 +2,8 @@
 
 面向个人 NAS 的轻量文件名搜索：plocate + Linux inotify + Python 标准库网页服务。支持中文子串、多个关键词、目录与扩展名筛选、文件预览、下载、复制 Windows UNC 路径。
 
+Windows 桌面版的可行性、系统右键菜单与路径映射方案见 [Windows 客户端方案](docs/Windows客户端方案.md)（研究方案，尚未实现）。
+
 ## 运行方式
 
 工程主目录：`D:\code\nas-find`。目标机器：Ubuntu 24.04、`192.168.0.104`，共享根目录 `/mnt/Disk1`。
