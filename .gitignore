@@ -4,3 +4,10 @@ __pycache__/
 .venv/
 dist/
 .pytest_cache/
+node_modules/
+target/
+desktop/src-tauri/gen/
+desktop/src-tauri/icons/*
+!desktop/src-tauri/icons/source.svg
+!desktop/src-tauri/icons/icon.ico
+!desktop/src-tauri/icons/icon.png

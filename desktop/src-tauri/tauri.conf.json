@@ -1,0 +1,13 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "NAS Find",
+  "version": "0.1.0",
+  "identifier": "local.nas-find.desktop",
+  "build": {"frontendDist": "../src"},
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [{"label": "main", "title": "NAS Find", "width": 1080, "height": 740, "minWidth": 720, "minHeight": 480, "center": true}],
+    "security": {"csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; form-action 'none'"}
+  },
+  "bundle": {"active": true, "targets": ["nsis"], "icon": ["icons/icon.ico"], "windows": {"nsis": {"installMode": "currentUser", "languages": ["SimpChinese", "English"], "displayLanguageSelector": false}}}
+}

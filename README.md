@@ -2,7 +2,7 @@
 
 面向个人 NAS 的轻量文件名搜索：plocate + Linux inotify + Python 标准库网页服务。支持中文子串、多个关键词、目录与扩展名筛选、文件预览、下载、复制 Windows UNC 路径。
 
-Windows 桌面版的可行性、系统右键菜单与路径映射方案见 [Windows 客户端方案](docs/Windows客户端方案.md)（研究方案，尚未实现）。
+Windows 桌面版见 [客户端使用与构建](docs/260906-1807-客户端实现与使用.md)，前期研究见 [Windows 客户端方案](docs/260906-1740-Windows客户端方案.md)。`docs/` 文档按首次建立时间使用 `YYMMDD-HHmm-说明.md` 命名，后续修订保留原文件名。
 
 ## 运行方式
 
@@ -69,7 +69,7 @@ systemctl --user disable --now nas-find
 
 ## 验证
 
-本次真实部署的容量、延迟、运行状态和验证边界见 [部署与验证记录](docs/验证记录.md)。
+本次真实部署的容量、延迟、运行状态和验证边界见 [部署与验证记录](docs/260906-1600-验证记录.md)。
 
 Linux 上指定解包后的真实 plocate 程序运行：
 

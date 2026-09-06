@@ -1,0 +1,22 @@
+[package]
+name = "nas-find-desktop"
+version = "0.1.0"
+description = "NAS Find Windows client"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-single-instance = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "cookies", "rustls-tls"] }
+url = "2"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_WindowsAndMessaging", "Win32_NetworkManagement_WNet", "Win32_System_Com", "Win32_System_Registry", "Win32_System_Memory", "Win32_System_DataExchange", "Win32_Security_Cryptography"] }
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1

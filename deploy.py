@@ -80,9 +80,12 @@ def main():
     with tempfile.TemporaryDirectory(prefix="nas-find-upload-") as temp:
         archive = Path(temp) / "source.tar.gz"
         with tarfile.open(archive, "w:gz") as tar:
-            for path in ROOT.rglob("*"):
+            sources = [ROOT / name for name in ("README.md", "deploy.py", ".gitignore")]
+            for directory in ("nasfind", "tests", "docs"):
+                sources.extend((ROOT / directory).rglob("*"))
+            for path in sources:
                 relative = path.relative_to(ROOT)
-                if not path.is_file() or any(p in (".git", ".local", "__pycache__", "dist", ".venv") for p in relative.parts):
+                if not path.is_file() or path.is_symlink() or "__pycache__" in relative.parts:
                     continue
                 tar.add(path, arcname=relative.as_posix())
         command = ["ssh", *SSH_FLAGS, args.host]
