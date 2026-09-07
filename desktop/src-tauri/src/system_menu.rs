@@ -32,6 +32,21 @@ impl Paths {
     }
 }
 
+fn copy_as_path_text(paths: &[String]) -> Result<String, String> {
+    let mut text = String::new();
+    let mut bytes = 2; // UTF-16 terminator, as in the existing bulk clipboard limit.
+    for path in paths {
+        bytes += (path.encode_utf16().count() + 4) * 2; // quotes and CRLF
+        if bytes > crate::bulk::CLIPBOARD_BYTES {
+            return Err("路径文本超过剪贴板容量，请使用导出路径".into());
+        }
+        text.push('"');
+        text.push_str(path);
+        text.push_str("\"\r\n");
+    }
+    Ok(text)
+}
+
 #[tauri::command]
 pub async fn show_system_menu(
     id: String,
@@ -101,7 +116,7 @@ pub async fn show_system_menu(
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 let items = ShellItems::from_paths(&resolved).map_err(|e| {
-                    format!("无法读取文件的系统菜单，文件可能已移动或共享离线：{e}")
+                    format!("无法读取所选项目的系统菜单：{e}")
                 })?;
                 let menu = ContextMenu::new(items)
                     .map_err(|e| format!("无法创建系统菜单：{e}"))?
@@ -112,7 +127,14 @@ pub async fn show_system_menu(
                     .map_err(|e| format!("无法显示系统菜单：{e}"))?;
                 let invoked = selected.is_some();
                 if let Some(item) = selected {
-                    item.execute().map_err(|e| format!("系统操作未完成：{e}"))?;
+                    // The native Copy as path handler can silently produce an
+                    // empty clipboard when CF_HDROP cannot render long UNC paths.
+                    // Reuse our exact selected paths for this standard text action.
+                    if item.menu_item().command_string.as_deref() == Some("copyaspath") {
+                        native::clipboard(&copy_as_path_text(&resolved)?, false, owner)?;
+                    } else {
+                        item.execute().map_err(|e| format!("系统操作未完成：{e}"))?;
+                    }
                 }
                 Ok(json!({"invoked":invoked}))
             })();
@@ -127,6 +149,13 @@ pub async fn show_system_menu(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn copy_as_path_preserves_long_unicode_paths_and_order() {
+        let paths = vec![format!(r"\\server\share\{}\视频.mp4", "long".repeat(80)), r"Z:\another directory\短片.mp4".into()];
+        let text = copy_as_path_text(&paths).unwrap();
+        assert_eq!(text, format!("\"{}\"\r\n\"{}\"\r\n", paths[0], paths[1]));
+        assert!(copy_as_path_text(&["x".repeat(crate::bulk::CLIPBOARD_BYTES / 2)]).is_err());
+    }
     #[test]
     fn selection_accepts_cross_directory_without_a_count_ceiling() {
         let mut paths = Paths::default();

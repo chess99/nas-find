@@ -1,7 +1,7 @@
 {
   "name": "nas-find-desktop",
   "private": true,
-  "version": "0.4.0",
+  "version": "0.4.1",
   "type": "module",
   "scripts": {"dev": "tauri dev", "build": "tauri build", "check": "node --check src/app.js", "test": "node sync.mjs && node --test tests/*.test.js"},
   "devDependencies": {"@tauri-apps/cli": "^2.10.0"}

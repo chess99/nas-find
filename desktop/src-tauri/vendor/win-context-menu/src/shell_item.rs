@@ -7,9 +7,12 @@
 
 use std::path::{Path, PathBuf};
 
+use windows::Win32::Foundation::{E_OUTOFMEMORY, HWND};
 use windows::Win32::System::Com::CoTaskMemAlloc;
 use windows::Win32::UI::Shell::Common::ITEMIDLIST;
-use windows::Win32::UI::Shell::{IShellFolder, SHBindToObject, SHBindToParent, SHParseDisplayName};
+use windows::Win32::UI::Shell::{
+    ILCombine, IShellFolder, SHBindToObject, SHBindToParent, SHParseDisplayName,
+};
 
 use crate::com::Pidl;
 use crate::error::{Error, Result};
@@ -81,26 +84,7 @@ impl ShellItems {
                 _ => {}
             }
 
-            let wide = path_to_wide(&canonical);
-            let pcwstr = wide_to_pcwstr(&wide);
-
-            // Parse the display name to an absolute PIDL.
-            let mut abs_pidl: *mut ITEMIDLIST = std::ptr::null_mut();
-            // SAFETY: `SHParseDisplayName` is a standard Shell API. We pass a
-            // valid null-terminated wide string (`pcwstr` derived from `wide`)
-            // and receive an output PIDL allocated via `CoTaskMemAlloc`. On
-            // success the PIDL is wrapped in `Pidl` for automatic cleanup.
-            unsafe {
-                SHParseDisplayName(pcwstr, None, &mut abs_pidl, 0, None).map_err(|e| {
-                    Error::ParsePath {
-                        path: canonical.clone(),
-                        source: e,
-                    }
-                })?;
-            }
-            // SAFETY: `abs_pidl` was just allocated by `SHParseDisplayName`
-            // via `CoTaskMemAlloc`. Ownership transfers to `Pidl`.
-            let abs_pidl = unsafe { Pidl::from_raw(abs_pidl) };
+            let abs_pidl = parse_absolute_path(&canonical)?;
 
             // Bind to parent to get the IShellFolder and a relative child PIDL.
             let mut child_pidl_ptr: *mut ITEMIDLIST = std::ptr::null_mut();
@@ -174,29 +158,14 @@ impl ShellItems {
             .map(|p| strip_extended_prefix(&p))
             .unwrap_or_else(|_| folder.to_path_buf());
 
-        let wide = path_to_wide(&canonical);
-        let pcwstr = wide_to_pcwstr(&wide);
-
-        let mut abs_pidl: *mut ITEMIDLIST = std::ptr::null_mut();
-        // SAFETY: Same as the `SHParseDisplayName` call in `from_paths`.
-        unsafe {
-            SHParseDisplayName(pcwstr, None, &mut abs_pidl, 0, None).map_err(|e| {
-                Error::ParsePath {
-                    path: canonical.clone(),
-                    source: e,
-                }
-            })?;
-        }
-        // SAFETY: `abs_pidl` was just allocated by `SHParseDisplayName`.
-        let abs_pidl = unsafe { Pidl::from_raw(abs_pidl) };
+        let abs_pidl = parse_absolute_path(&canonical)?;
 
         // Bind directly to the folder as an IShellFolder so we can ask for its
         // background context menu via `CreateViewObject`.
         // SAFETY: `SHBindToObject` with `None` parent and a valid absolute
         // PIDL returns the corresponding `IShellFolder`.
-        let folder_shell: IShellFolder = unsafe {
-            SHBindToObject(None, abs_pidl.as_ptr(), None).map_err(Error::BindToParent)?
-        };
+        let folder_shell: IShellFolder =
+            unsafe { SHBindToObject(None, abs_pidl.as_ptr(), None).map_err(Error::BindToParent)? };
 
         Ok(Self {
             parent: folder_shell,
@@ -206,6 +175,87 @@ impl ShellItems {
             results_host: None,
         })
     }
+}
+
+/// Parse long filesystem paths relative to an existing Shell folder when the
+/// desktop parser hits MAX_PATH. An extended-path prefix alone is not accepted
+/// by SHParseDisplayName. Keep real Shell PIDLs instead of inventing file data.
+pub(crate) fn parse_absolute_path(path: &Path) -> Result<Pidl> {
+    fn direct(path: &Path) -> windows::core::Result<Pidl> {
+        let wide = path_to_wide(path);
+        let mut raw = std::ptr::null_mut();
+        // SAFETY: The string is terminated and the output is owned by Pidl,
+        // including any allocation returned on a failed call.
+        unsafe {
+            let result = SHParseDisplayName(wide_to_pcwstr(&wide), None, &mut raw, 0, None);
+            let pidl = Pidl::from_raw(raw);
+            result?;
+            if raw.is_null() {
+                return Err(windows::core::Error::from_hresult(E_OUTOFMEMORY));
+            }
+            Ok(pidl)
+        }
+    }
+
+    let resolve = || -> windows::core::Result<Pidl> {
+        let first_error = match direct(path) {
+            Ok(pidl) => return Ok(pidl),
+            Err(error) => error,
+        };
+        if path_to_wide(path).len() <= 260 {
+            return Err(first_error);
+        }
+
+        // Find a parsable ancestor iteratively, then descend one name at a
+        // time. This also covers parent directories longer than MAX_PATH.
+        let mut ancestor = path;
+        let mut names = Vec::new();
+        let mut absolute = loop {
+            let Some(name) = ancestor.file_name() else {
+                return Err(first_error);
+            };
+            let Some(parent) = ancestor.parent() else {
+                return Err(first_error);
+            };
+            names.push(name);
+            ancestor = parent;
+            if let Ok(pidl) = direct(ancestor) {
+                break pidl;
+            }
+        };
+        for name in names.into_iter().rev() {
+            let wide = path_to_wide(Path::new(name));
+            let mut raw = std::ptr::null_mut();
+            // SAFETY: Bind uses a live absolute PIDL. ParseDisplayName returns
+            // an owned child PIDL; ILCombine copies both into a new allocation.
+            unsafe {
+                let folder: IShellFolder = SHBindToObject(None, absolute.as_ptr(), None)?;
+                let result = folder.ParseDisplayName(
+                    HWND::default(),
+                    None,
+                    wide_to_pcwstr(&wide),
+                    None,
+                    &mut raw,
+                    std::ptr::null_mut(),
+                );
+                let child = Pidl::from_raw(raw);
+                result?;
+                if raw.is_null() {
+                    return Err(windows::core::Error::from_hresult(E_OUTOFMEMORY));
+                }
+                let combined = ILCombine(Some(absolute.as_ptr()), Some(child.as_ptr()));
+                if combined.is_null() {
+                    return Err(windows::core::Error::from_hresult(E_OUTOFMEMORY));
+                }
+                absolute = Pidl::from_raw(combined);
+            }
+        }
+        Ok(absolute)
+    };
+    resolve().map_err(|source| Error::ParsePath {
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
 /// Calculate the total byte size of a PIDL chain (excluding the 2-byte null

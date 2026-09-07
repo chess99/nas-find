@@ -10,7 +10,7 @@ pub enum Error {
     ComInit(windows::core::Error),
 
     /// A filesystem path could not be resolved to a shell item (PIDL).
-    #[error("Failed to parse path to shell item: {path}")]
+    #[error("Windows 无法识别此路径：{path}（{source}）")]
     ParsePath {
         /// The path that failed to resolve.
         path: PathBuf,

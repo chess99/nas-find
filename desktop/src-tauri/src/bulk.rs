@@ -8,7 +8,7 @@ use std::{
 };
 use tauri::{Manager, State};
 
-const CLIPBOARD_BYTES: usize = 16 * 1024 * 1024;
+pub(crate) const CLIPBOARD_BYTES: usize = 16 * 1024 * 1024;
 pub struct Job {
     pub status: Mutex<Value>,
 }
