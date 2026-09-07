@@ -3,11 +3,9 @@ use crate::{
     com::Pidl,
     error::{Error, Result},
     hidden_window::HiddenWindow,
-    shell_item::{parse_absolute_path, ShellItems},
-    util::strip_extended_prefix,
+    shell_item::ShellItems,
 };
 use std::{
-    path::Path,
     rc::Rc,
     time::{Duration, Instant},
 };
@@ -31,14 +29,11 @@ impl Drop for ResultsHost {
     }
 }
 
-pub(crate) fn from_paths(paths: &[impl AsRef<Path>]) -> Result<ShellItems> {
+pub(crate) fn from_paths(paths: &[std::path::PathBuf]) -> Result<ShellItems> {
     let mut absolute = Vec::with_capacity(paths.len());
+    let mut parser = crate::path_parser::PathParser::default();
     for path in paths {
-        let path = path.as_ref();
-        let canonical = std::fs::canonicalize(path)
-            .map(|p| strip_extended_prefix(&p))
-            .unwrap_or_else(|_| path.to_path_buf());
-        absolute.push(parse_absolute_path(&canonical)?);
+        absolute.push(parser.resolve(path)?.0);
     }
     let references: Vec<_> = absolute.iter().map(Pidl::as_ptr).collect();
     let window = HiddenWindow::new()?;
@@ -54,7 +49,7 @@ pub(crate) fn from_paths(paths: &[impl AsRef<Path>]) -> Result<ShellItems> {
             EBO_NOPERSISTVIEWSTATE | EBO_NOTRAVELLOG | EBO_NOBORDER | EBO_NAVIGATEONCE,
         )?;
         let settings = FOLDERSETTINGS {
-            ViewMode: FVM_DETAILS.0 as u32,
+            ViewMode: FVM_LIST.0 as u32,
             fFlags: (FWF_NOICONS | FWF_NOGROUPING | FWF_NOBROWSERVIEWSTATE).0 as u32,
         };
         host.browser.Initialize(
@@ -92,6 +87,10 @@ pub(crate) fn from_paths(paths: &[impl AsRef<Path>]) -> Result<ShellItems> {
             std::thread::sleep(Duration::from_millis(10));
         };
         let parent: IShellFolder = view.GetFolder()?;
+        // This view only owns the selection; avoid drawing/sorting detail columns.
+        if let Ok(view) = windows::core::Interface::cast::<IFolderView2>(&view) {
+            let _ = view.SetRedraw(false);
+        }
         let folder: IResultsFolder = windows::core::Interface::cast(&parent)?;
         let mut children = Vec::with_capacity(paths.len());
         for absolute in &references {
@@ -107,6 +106,7 @@ pub(crate) fn from_paths(paths: &[impl AsRef<Path>]) -> Result<ShellItems> {
             child_pidls: children,
             _absolute_pidls: absolute,
             is_background: false,
+            file_drop: crate::selection_data::FileDropData::for_paths(paths),
             results_host: Some(host),
         })
     }
@@ -115,7 +115,9 @@ pub(crate) fn from_paths(paths: &[impl AsRef<Path>]) -> Result<ShellItems> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::strip_extended_prefix;
     use crate::{init_com, ContextMenu};
+    use std::path::Path;
     use windows::Win32::{
         Foundation::HWND,
         System::{
@@ -139,6 +141,9 @@ mod tests {
                 .parent
                 .GetUIObjectOf(HWND::default(), &ids, None)
                 .unwrap();
+            if let Some(data) = &items.file_drop {
+                data.install(&object).unwrap();
+            }
             let array: IShellItemArray = SHCreateShellItemArrayFromDataObject(&object).unwrap();
             let mut item_paths = Vec::new();
             for i in 0..array.GetCount().unwrap() {
@@ -188,15 +193,7 @@ mod tests {
                 actual.sort();
                 assert!(actual == expected,"the Shell must receive every selected path exactly once ({} actual, {} expected)", actual.len(), expected.len());
             } else {
-                // Windows' legacy CF_HDROP renderer can reject long NAS paths
-                // without 8.3 aliases. The Shell item array above is complete;
-                // this OS/extension limitation must not be mistaken for lost items.
-                let error = medium.err().unwrap();
-                assert_eq!(error.code().0 as u32, 0x8007007A);
-                assert!(paths
-                    .iter()
-                    .any(|p| p.to_string_lossy().encode_utf16().count() >= 260));
-                println!("Windows legacy CF_HDROP cannot render this long-path selection; Shell item array is complete");
+                panic!("complete CF_HDROP required: {:?}", medium.err().unwrap());
             }
         }
         let menu = ContextMenu::new(items).unwrap();

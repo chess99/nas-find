@@ -2164,7 +2164,7 @@ dependencies = [
 
 [[package]]
 name = "nas-find-desktop"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "chrono",
  "reqwest 0.12.28",
@@ -4659,6 +4659,7 @@ version = "0.1.4"
 dependencies = [
  "thiserror 2.0.20",
  "windows 0.58.0",
+ "windows-core 0.58.0",
 ]
 
 [[package]]

@@ -45,6 +45,8 @@ mod hidden_window;
 mod invoke;
 mod menu_items;
 mod results_folder;
+mod path_parser;
+mod selection_data;
 mod shell_item;
 mod util;
 

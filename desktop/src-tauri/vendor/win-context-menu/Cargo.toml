@@ -97,6 +97,7 @@ optional = true
 [dependencies.windows]
 version = "0.58"
 features = [
+    "implement",
     "Win32_Foundation",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
@@ -108,6 +109,9 @@ features = [
     "Win32_System_Ole",
     "Win32_System_Registry",
 ]
+
+[dependencies.windows-core]
+version = "0.58"
 
 [lints.clippy]
 missing_safety_doc = "warn"

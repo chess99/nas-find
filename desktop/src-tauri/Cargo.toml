@@ -1,6 +1,6 @@
 [package]
 name = "nas-find-desktop"
-version = "0.4.1"
+version = "0.4.2"
 description = "NAS Find Windows client"
 edition = "2021"
 

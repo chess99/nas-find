@@ -5,16 +5,16 @@
 //! `QueryContextMenu` to populate an `HMENU`, optionally show it with
 //! `TrackPopupMenu`, and finally invoke or inspect the result.
 
+use windows::core::{Interface, PSTR};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::System::Com::FORMATETC;
 use windows::Win32::System::Ole::OleGetClipboard;
 use windows::Win32::UI::Shell::Common::ITEMIDLIST;
 use windows::Win32::UI::Shell::{
-    CMF_EXPLORE, CMF_EXTENDEDVERBS, CMF_NORMAL, GCS_VERBA, IContextMenu, IContextMenu2,
-    IContextMenu3,
+    IContextMenu, IContextMenu2, IContextMenu3, CMF_EXPLORE, CMF_EXTENDEDVERBS, CMF_NORMAL,
+    GCS_VERBA,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::{Interface, PSTR};
 
 use crate::error::{Error, Result};
 use crate::hidden_window::HiddenWindow;
@@ -116,6 +116,8 @@ impl ContextMenu {
                 .QueryContextMenu(hmenu, 0, ID_FIRST, ID_LAST, flags)
                 .map_err(Error::QueryContextMenu)?;
         }
+
+        self.check_file_drop(hmenu)?;
 
         // For background menus, inject clipboard-related items (Paste) that
         // CreateViewObject doesn't include by default.
@@ -235,6 +237,8 @@ impl ContextMenu {
                 .map_err(Error::QueryContextMenu)?;
         }
 
+        self.check_file_drop(hmenu)?;
+
         // For background menus, inject clipboard-related items (Paste).
         if self.items.is_background {
             inject_clipboard_items(hmenu);
@@ -285,6 +289,7 @@ impl ContextMenu {
                 .map_err(Error::QueryContextMenu)?;
         }
 
+        self.check_file_drop(hmenu)?;
         let result = crate::invoke::invoke_command_by_verb(&ctx_menu, verb, hwnd);
 
         unsafe {
@@ -292,6 +297,19 @@ impl ContextMenu {
         }
 
         result
+    }
+
+    fn check_file_drop(&self, hmenu: HMENU) -> Result<()> {
+        if let Some(data) = &self.items.file_drop {
+            if let Err(error) = data.check() {
+                // Do not display a partial menu if complete selection data failed.
+                unsafe {
+                    let _ = DestroyMenu(hmenu);
+                }
+                return Err(error);
+            }
+        }
+        Ok(())
     }
 
     fn query_flags(&self) -> u32 {
@@ -323,6 +341,10 @@ impl ContextMenu {
             // implements IContextMenu for the given child PIDLs.
             let pidl_ptrs: Vec<*const ITEMIDLIST> =
                 self.items.child_pidls.iter().map(|p| p.as_ptr()).collect();
+
+            if let Some(data) = &self.items.file_drop {
+                return data.context_menu(&self.items.parent, &pidl_ptrs, hwnd);
+            }
 
             // SAFETY: `GetUIObjectOf` is a COM call on our valid IShellFolder.
             // `pidl_ptrs` contains valid child-relative PIDLs owned by
@@ -378,8 +400,7 @@ fn enumerate_menu(ctx_menu: &IContextMenu, hmenu: HMENU) -> Result<Vec<MenuItem>
             let _ = GetMenuItemInfoW(hmenu, i as u32, true, &mut mii);
         }
 
-        let label = String::from_utf16_lossy(&label_buf[..mii.cch as usize])
-            .replace('&', "");
+        let label = String::from_utf16_lossy(&label_buf[..mii.cch as usize]).replace('&', "");
 
         let id = mii.wID;
 
@@ -463,8 +484,7 @@ fn get_menu_item_info_for_id(
         let _ = GetMenuItemInfoW(hmenu, command_id, false, &mut mii);
     }
 
-    let label =
-        String::from_utf16_lossy(&label_buf[..mii.cch as usize]).replace('&', "");
+    let label = String::from_utf16_lossy(&label_buf[..mii.cch as usize]).replace('&', "");
 
     let command_string = if command_id >= ID_FIRST {
         get_verb(ctx_menu, command_id - ID_FIRST)
