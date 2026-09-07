@@ -156,6 +156,7 @@ impl ContextMenu {
                 // Injected "Paste" item — invoke via verb string
                 let ctx_menu_clone = ctx_menu.clone();
                 let hwnd_val = hwnd;
+                let results_host = self.items.results_host.clone();
                 Some(SelectedItem {
                     menu_item: MenuItem {
                         id: ID_PASTE_INJECTED,
@@ -169,6 +170,7 @@ impl ContextMenu {
                     },
                     command_id: ID_PASTE_INJECTED,
                     invoker: Some(Box::new(move |_params: Option<InvokeParams>| {
+                        let _keep_results_alive = &results_host;
                         crate::invoke::invoke_command_by_verb(&ctx_menu_clone, "paste", hwnd_val)
                     })),
                     _hidden_window: Some(hidden_window),
@@ -177,10 +179,12 @@ impl ContextMenu {
                 let item = get_menu_item_info_for_id(&ctx_menu, hmenu, command_id)?;
                 let ctx_menu_clone = ctx_menu.clone();
                 let hwnd_val = hwnd;
+                let results_host = self.items.results_host.clone();
                 Some(SelectedItem {
                     menu_item: item,
                     command_id,
                     invoker: Some(Box::new(move |params: Option<InvokeParams>| {
+                        let _keep_results_alive = &results_host;
                         invoke_command(&ctx_menu_clone, command_id - ID_FIRST, hwnd_val, params)
                     })),
                     _hidden_window: Some(hidden_window),

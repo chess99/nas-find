@@ -22,21 +22,11 @@ impl Drop for MenuGuard {
 
 #[derive(Default)]
 struct Paths {
-    parent: Option<String>,
     values: Vec<String>,
 }
 impl Paths {
     fn add(&mut self, path: &str) -> Result<(), String> {
         config::relative(path)?;
-        let parent = path.rsplit_once('/').map_or("", |(parent, _)| parent);
-        if self.parent.as_deref().is_some_and(|value| value != parent) {
-            return Err(
-                "系统菜单暂不支持跨目录多选，请选择同一目录中的项目；复制路径和导出仍可使用".into(),
-            );
-        }
-        if self.parent.is_none() {
-            self.parent = Some(parent.into());
-        }
         self.values.push(path.into());
         Ok(())
     }
@@ -138,13 +128,14 @@ pub async fn show_system_menu(
 mod tests {
     use super::*;
     #[test]
-    fn selection_is_same_directory_without_a_count_ceiling() {
+    fn selection_accepts_cross_directory_without_a_count_ceiling() {
         let mut paths = Paths::default();
         for i in 0..2000 {
             paths.add(&format!("视频/片段 {i}.mp4")).unwrap();
         }
         assert_eq!(paths.values.len(), 2000);
-        assert!(paths.add("另一个目录/片段.mp4").is_err());
+        paths.add("另一个目录/片段.mp4").unwrap();
+        assert_eq!(paths.values.len(), 2001);
         let mut root = Paths::default();
         root.add("a.mp4").unwrap();
         root.add("b.mp4").unwrap();

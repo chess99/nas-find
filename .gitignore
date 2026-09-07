@@ -6,6 +6,7 @@ dist/
 .pytest_cache/
 node_modules/
 target/
+desktop/src-tauri/vendor/*/Cargo.lock
 desktop/src/shared/
 desktop/src-tauri/gen/
 desktop/src-tauri/icons/*

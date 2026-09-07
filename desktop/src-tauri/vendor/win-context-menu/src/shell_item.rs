@@ -29,6 +29,7 @@ pub struct ShellItems {
     /// Keep absolute PIDLs alive so child pointers derived from them stay valid.
     pub(crate) _absolute_pidls: Vec<Pidl>,
     pub(crate) is_background: bool,
+    pub(crate) results_host: Option<std::rc::Rc<crate::results_folder::ResultsHost>>,
 }
 
 impl ShellItems {
@@ -42,7 +43,7 @@ impl ShellItems {
         Self::from_paths(&[path.as_ref().to_path_buf()])
     }
 
-    /// Resolve multiple paths. **All paths must share the same parent folder.**
+    /// Resolve multiple paths, using a native results folder for cross-directory selections.
     ///
     /// This is the multi-select equivalent — the resulting context menu will
     /// act on all specified items at once (like selecting several files in
@@ -50,8 +51,7 @@ impl ShellItems {
     ///
     /// # Errors
     ///
-    /// - [`Error::NoCommonParent`] if `paths` is empty or the paths do not
-    ///   share a common parent folder.
+    /// - [`Error::NoCommonParent`] if `paths` is empty.
     /// - [`Error::ParsePath`] if any path cannot be resolved.
     pub fn from_paths(paths: &[impl AsRef<Path>]) -> Result<Self> {
         if paths.is_empty() {
@@ -69,11 +69,11 @@ impl ShellItems {
                 .map(|p| strip_extended_prefix(&p))
                 .unwrap_or_else(|_| path.to_path_buf());
 
-            // Verify all paths share the same parent
+            // Keep the direct folder path when possible; otherwise use a results folder.
             let this_parent = canonical.parent().map(|p| p.to_path_buf());
             match (&parent_path, &this_parent) {
                 (Some(existing), Some(new)) if existing != new => {
-                    return Err(Error::NoCommonParent);
+                    return crate::results_folder::from_paths(paths);
                 }
                 (None, Some(_)) => {
                     parent_path = this_parent;
@@ -155,6 +155,7 @@ impl ShellItems {
             child_pidls,
             _absolute_pidls: absolute_pidls,
             is_background: false,
+            results_host: None,
         })
     }
 
@@ -202,6 +203,7 @@ impl ShellItems {
             child_pidls: Vec::new(),
             _absolute_pidls: vec![abs_pidl],
             is_background: true,
+            results_host: None,
         })
     }
 }

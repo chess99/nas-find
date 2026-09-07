@@ -99,6 +99,7 @@ version = "0.58"
 features = [
     "Win32_Foundation",
     "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
     "Win32_UI_Shell",
     "Win32_UI_Shell_Common",
     "Win32_UI_WindowsAndMessaging",
@@ -111,6 +112,9 @@ features = [
 [lints.clippy]
 missing_safety_doc = "warn"
 undocumented_unsafe_blocks = "warn"
+
+[dev-dependencies.tempfile]
+version = "3"
 
 [lints.clippy.all]
 level = "warn"

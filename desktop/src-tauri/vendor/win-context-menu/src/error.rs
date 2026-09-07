@@ -27,6 +27,10 @@ pub enum Error {
     #[error("Selected paths do not share a common parent folder")]
     NoCommonParent,
 
+    /// Do not expose a menu for only a subset of the selected objects.
+    #[error("系统未能完整载入所选项目，未打开部分选择的菜单。请检查文件是否仍可访问后重试")]
+    IncompleteSelection,
+
     /// The shell folder refused to hand out an `IContextMenu` interface.
     #[error("Failed to get context menu interface: {0}")]
     GetContextMenu(windows::core::Error),

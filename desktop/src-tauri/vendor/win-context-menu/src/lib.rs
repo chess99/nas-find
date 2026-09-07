@@ -44,6 +44,7 @@ mod ffi;
 mod hidden_window;
 mod invoke;
 mod menu_items;
+mod results_folder;
 mod shell_item;
 mod util;
 
@@ -179,12 +180,12 @@ mod tests {
     }
 
     #[test]
-    fn test_multi_paths_different_folders_fails() {
+    fn test_multi_paths_different_folders_supported() {
         let _com = init_com().unwrap();
         let result = ShellItems::from_paths(&[
             r"C:\Windows\notepad.exe",
             r"C:\Users",
         ]);
-        assert!(result.is_err());
+        assert!(result.is_ok());
     }
 }
