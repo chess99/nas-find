@@ -361,7 +361,7 @@ mod tests {
             client: crate::client().unwrap(),
             config: crate::config::Config {
                 server: format!("http://{address}"),
-                ..Default::default()
+                ..crate::config::fixture()
             },
         };
         let result = tauri::async_runtime::block_on(super::transfer(
@@ -384,7 +384,7 @@ mod tests {
 
     #[test]
     fn bulk_lines_are_quoted_and_use_one_mapping() {
-        let config = crate::config::Config::default();
+        let config = crate::config::fixture();
         assert_eq!(
             super::line(&config, "资料/a b.txt", Some(&config.share), true).unwrap(),
             "\"Z:\\资料\\a b.txt\"\r\n"
@@ -392,7 +392,7 @@ mod tests {
         assert!(super::line(&config, "bad\nname.txt", None, false).is_err());
         assert_eq!(
             super::line(&config, "a.txt", None, false).unwrap(),
-            "\\\\192.168.0.104\\Disk1\\a.txt\r\n"
+            "\\\\nas.example.internal\\files\\a.txt\r\n"
         );
         assert!(super::csv_line(&config, "a\nb\"c.txt", None).contains("\"./a\nb\"\"c.txt\""));
     }

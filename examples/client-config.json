@@ -1,0 +1,6 @@
+{
+  "server": "http://nas.example.internal:8765",
+  "share": "\\\\nas.example.internal\\files",
+  "drive": "",
+  "prefer_drive": false
+}

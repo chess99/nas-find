@@ -1,84 +1,57 @@
 # NAS Find
 
-面向个人 NAS 的轻量文件名搜索：plocate + Linux inotify + Python 标准库网页服务。支持中文子串、多个关键词、目录与扩展名筛选、文件预览、下载、复制 Windows UNC 路径。
+面向 Linux / NAS 的文件名搜索工具，提供网页界面和 Windows 桌面客户端。
 
-当前 0.2 版功能见 [全结果浏览与批量路径](docs/260906-2315-全结果浏览与批量路径.md)，构建安装见 [客户端使用与构建](docs/260906-1807-客户端实现与使用.md)，前期研究见 [Windows 客户端方案](docs/260906-1740-Windows客户端方案.md)。`docs/` 文档按首次建立时间使用 `YYMMDD-HHmm-说明.md` 命名，后续修订保留原文件名。
+索引在 NAS 上维护，搜索结果按需传输。Windows 客户端通过 SMB 共享或映射盘，用系统默认应用打开原文件。
 
-## 运行方式
+## 定位与取舍
 
-工程主目录：`D:\code\nas-find`。目标机器：Ubuntu 24.04、`192.168.0.104`，共享根目录 `/mnt/Disk1`。
+NAS Find 面向已有文件共享、主要按文件名查找的用户：希望在 NAS 上获得接近 Everything 的搜索和打开体验，同时保持部署简单、减少数据盘的多余访问。
 
-在 Windows 运行：
-
-```powershell
-python deploy.py --host ubuntu
-```
-
-部署使用已有 SSH 密钥和普通 `zcs` 用户。将 Ubuntu 官方的 plocate 1.1.19-2ubuntu2 软件包解包到私有目录，不修改系统已安装软件；先在 SSD 临时目录运行集成测试，通过后切换版本并启动用户级 systemd 服务。启用该用户的 linger 以便开机启动、退出 SSH 后继续运行。
-
-访问地址：`http://192.168.0.104:8765`。登录密码保存在本机 `.local/访问说明.txt`，不会进入 Git。服务监听指定局域网地址，仅接受配置中允许的来源网段。
-
-## 索引维护
-
-- 数据库、服务代码、日志和运行状态在系统 SSD；文件仍在原 NAS 数据盘。
-- 首次运行会注册目录监听并建立索引，会读取数据盘。
-- 创建、删除、重命名文件或目录后标记待更新，合并事件；默认最多每小时进行一次常规更新，等待至少 30 秒没有新事件。
-- **没有事件时不运行常规更新器**。仅修改正文不会触发文件名索引更新。
-- plocate 更新时仍检查目录，复用未变化目录的文件名记录；不是逐文件可修改的数据库。
-- 重启后校验停机期间的变化；通知溢出后重建监听并校验；每 7 天进行一次兜底校验。
-- 新快照在 SSD 上完成、校验后原子替换，搜索继续使用旧快照。挂载失败或更新器失败时保留旧快照。
-- 搜索只读索引，不逐条检查实际文件是否存在，也不获取大小、日期或缩略图。预览或下载时才读取实际文件。
-
-默认排除目录名：`.git`、`node_modules`、`.pnpm-store`、`.venv`、`__pycache__`。
-
-默认排除相对目录：`docker-volume/photoprism/cache`、`docker-volume/photoprism_mariadb`。保留其他应用数据、备份、PhotoPrism sidecar 和用户内容。目录名排除也会隐藏同名索引结果。
-
-## 文件访问
-
-浏览器支持文本（前 64 KiB）、常见图片、PDF、兼容的音视频预览和文件下载。音视频支持 HTTP Range，可跳播。Office 文档、压缩包及浏览器不支持的媒体可下载或复制 UNC 路径到 Windows 打开。没有安装本地协议助手，因此网页不直接唤起资源管理器。
-
-服务端不提供源文件删除、移动、上传功能。路径限制和逐级 `O_NOFOLLOW` 文件描述符访问拒绝目录跳转及符号链接；特殊设备文件不提供下载。非文本 HTML/SVG 不以活动页面内联显示。搜索结果中的符号链接可能可见，但网页访问会被拒绝。桌面客户端通过 Samba 使用系统默认应用打开原文件，后续保存由该应用和 Samba 权限控制。
-
-新版默认匹配最后一级名称，勾选“匹配路径”后匹配共享内相对路径。普通词为子串，多词 AND；引号保留含空格短语，`*`、`?`、`[]` 使用通配符匹配，不提供正则模式。类型分类、扩展名与目录范围共同筛选，不输入关键词即可浏览全部结果。每页最多 500 条，以虚拟列表浏览；结果总量不再按 200 或 10,001 条截断。查询有资源和耗时额度，未完整完成的结果会明确提示且不可导出。目录条目来自最近一次索引发布时的监听目录快照。
-
-结果列表支持跨页多选和 Ctrl+A 全选。Ctrl+Shift+C 复制全部选中路径，最多 16 MiB；更大清单可导出 TXT，特殊名称可导出 CSV 完整清单。桌面导出保存到下载目录下的 `NAS Find` 文件夹，并提供打开位置。
-
-登录会话持续至服务重启或 30 天；密码是随机生成并保存在权限为 0600 的文件中。当前部署面向可信局域网 HTTP 使用，不作为互联网公开服务。
-
-## 维护
-
-远程路径：
-
-| 内容 | 路径 |
+| 工具 | 功能侧重 |
 |---|---|
-| 当前版本 | `~/.local/share/nas-find/current` |
-| 历史版本 | `~/.local/share/nas-find/releases/` |
-| plocate 程序 | `~/.local/share/nas-find/vendor/` |
-| 配置、密码 | `~/.config/nas-find/` |
-| 索引、状态 | `~/.local/state/nas-find/` |
-| systemd 单元 | `~/.config/systemd/user/nas-find.service` |
+| [Everything](https://www.voidtools.com/support/everything/folder_indexing/) | Windows 本地快速搜索；支持网络文件夹索引，但机制不同于本地 NTFS 索引 |
+| [kodbox](https://github.com/kalcaddle/kodbox) | 网盘与文件管理，包含在线编辑、分享和协作等功能 |
+| [sist2](https://github.com/sist2app/sist2) | 内容检索，提供文本与元数据提取、缩略图及可选 OCR 等能力 |
+| **NAS Find** | NAS 端文件名索引、快速浏览与批量路径操作，通过原有共享打开文件 |
 
-```sh
-systemctl --user status nas-find
-journalctl --user -u nas-find -n 50 --no-pager
-systemctl --user restart nas-find
-systemctl --user disable --now nas-find
-```
+我们优先做好“找到文件，再打开它”：不在后台解析正文、EXIF 或音视频元数据，也不预生成缩略图，预览时才按需读取文件。可以接受新文件稍后出现在索引中，优先减少无变化时的目录遍历。
 
-更改 `~/.config/nas-find/config.json` 后重启生效。可覆盖 `exclude_names`、`exclude_paths`、`update_interval`、`debounce_seconds`、`reconcile_interval`、`port` 等字段；默认值在 `nasfind/config.py`。
+## 功能
 
-重新执行部署会保留配置、密码、索引及旧版本。版本信息保存在 `~/.local/share/nas-find/deployment.json`，`previous` 为上次版本路径；需要回滚时将 `current` 符号链接切回该路径，然后重启服务。
+- 中文片段和多关键词搜索，默认匹配名称，可切换为匹配路径。
+- 按视频、音频、图片、文档等类型筛选，也可指定扩展名和目录范围。
+- 全结果分页浏览、虚拟列表、跨页多选和全选。
+- 批量复制路径，导出 TXT 或保留特殊文件名的 CSV 清单。
+- 网页预览与下载，Windows 默认应用打开和文件定位。
+- 使用 inotify 合并文件名变化；没有变化时不执行常规索引更新。
 
-## 验证
+服务端使用 Python 标准库和 plocate，桌面端使用 Tauri。无需独立数据库服务。
 
-本次真实部署的容量、延迟、运行状态和验证边界见 [部署与验证记录](docs/260906-1600-验证记录.md)。
+## 开始使用
 
-Linux 上指定解包后的真实 plocate 程序运行：
+1. 在 Linux 上准备 plocate 和索引目录，按[部署文档](docs/deployment.md)配置并启动服务。
+2. 使用浏览器访问服务，或按[开发文档](docs/development.md)构建 Windows 客户端。
+3. 在客户端填写自己的服务地址和共享路径，参阅[使用说明](docs/usage.md)。
 
-```sh
-PLOCATE_BIN=/path/to/usr/bin/plocate \
-UPDATEDB_BIN=/path/to/usr/sbin/updatedb.plocate \
-python3 -m unittest discover -s tests -v
-```
+也可以把仓库交给 AI agent，要求它先读取 [AGENTS.md](AGENTS.md)，再按同一份部署文档执行。
 
-测试涵盖：中文中间片段、空目录、排除规则、无变化和正文修改时不更新、创建/移动/删除目录、离线期间变更恢复、通知溢出恢复、更新失败保留快照、登录、跨来源请求、路径越界/符号链接、空文件、HEAD 和 Range 下载。测试只在系统临时目录创建自有文件。
+部署时需要指定索引目录、共享地址和访问网段；配置示例与服务模板见[部署文档](docs/deployment.md)。
+
+## 适用范围
+
+NAS Find 搜索文件名与路径，不做文件正文全文检索。查询只读取索引；预览、打开和下载时才访问实际文件。
+
+首次建立索引、服务重启后的恢复校验和默认每 7 天一次的兜底校验会检查数据目录。单次复制路径最多 16 MiB，更大的清单可导出为文件。
+
+当前服务按可信局域网设计；Windows 端的文件访问权限由系统和 SMB 共享控制。
+
+## 文档与贡献
+
+[文档目录](docs/README.md) · [使用说明](docs/usage.md) · [部署](docs/deployment.md) · [开发与测试](docs/development.md)
+
+欢迎提交问题和改进建议。修改行为时请同步更新对应文档；当前操作说明与历史记录分开维护，人与 AI 共用文档。
+
+## 许可证
+
+本项目原创代码采用 [GNU AGPL 第 3 版](LICENSE)，SPDX 标识为 `AGPL-3.0-only`。第三方依赖及 `vendor/` 中的代码保留各自的许可证和版权声明。

@@ -162,10 +162,10 @@ mod tests {
         assert!(MenuGuard::acquire().is_ok());
     }
     #[test]
-    #[ignore = "reads registered Shell menus for NAS_MENU_TEST_PATH; never invokes commands"]
+    #[ignore = "requires NAS_FIND_CLIENT_CONFIG and NAS_MENU_TEST_PATH; never invokes commands"]
     fn installed_shell_handlers_are_available_for_unc_and_drive() {
         let relative = std::env::var("NAS_MENU_TEST_PATH").unwrap();
-        let config = config::Config::default();
+        let config = config::live_config(None);
         let mapping = native::mapping(&config.drive);
         let _com = init_com().unwrap();
         for path in [
@@ -179,11 +179,14 @@ mod tests {
                 .into_iter()
                 .map(|i| i.label)
                 .collect();
-            assert!(
-                labels.iter().any(|label| label.contains("PotPlayer")),
-                "PotPlayer menu missing"
-            );
-            println!("PotPlayer actions discovered in the Windows Shell menu.");
+            assert!(!labels.is_empty(), "No Shell actions were returned");
+            if let Ok(expected) = std::env::var("NAS_MENU_EXPECT_LABEL") {
+                assert!(
+                    labels.iter().any(|label| label.contains(&expected)),
+                    "Expected Shell action missing"
+                );
+            }
+            println!("Shell actions discovered for the configured shared file.");
         }
     }
 }

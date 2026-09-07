@@ -180,7 +180,7 @@ class Queries:
                 directories = self.engine.index_dirs
                 job.generation = self.engine.metadata.get("finished_at")
             command = [self.engine.config["plocate"], "-d", str(database), "-i", "-0"]
-            # Path mode is matched against visible relative paths, not /mnt/Disk1.
+            # Path mode matches visible relative paths, not the server's mount prefix.
             if not match_path:
                 command += ["-b"]
             candidates = terms if not match_path else []

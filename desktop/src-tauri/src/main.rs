@@ -314,8 +314,8 @@ fn main() {
             if let Some(index) = args.iter().position(|s| s == "--import-connection") {
                 let source = args.get(index + 1).ok_or("缺少连接文件路径")?;
                 let value: Value = serde_json::from_slice(&std::fs::read(source)?)?;
-                stored.config.server = value["url"].as_str().ok_or("连接文件缺少地址")?.into();
-                stored.config = stored.config.validated().map_err(std::io::Error::other)?;
+                stored.config = Config::import_connection(&stored.config, &value)
+                    .map_err(std::io::Error::other)?;
                 stored.password = Some(
                     native::protect(
                         value["password"]
@@ -401,12 +401,7 @@ mod tests {
         tauri::async_runtime::block_on(async {
             let file = std::env::var("NAS_FIND_ACCESS_FILE").unwrap();
             let access: Value = serde_json::from_slice(&std::fs::read(file).unwrap()).unwrap();
-            let config = Config {
-                server: access["url"].as_str().unwrap().into(),
-                ..Config::default()
-            }
-            .validated()
-            .unwrap();
+            let config = config::live_config(Some(&access));
             let session = login(config.clone(), access["password"].as_str().unwrap().into())
                 .await
                 .unwrap();

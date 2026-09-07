@@ -1,0 +1,17 @@
+{
+  "bind": "127.0.0.1",
+  "port": 8765,
+  "allowed_networks": ["127.0.0.0/8"],
+  "root": "/srv/storage",
+  "require_mount": true,
+  "unc_prefix": "\\\\nas.example.internal\\files",
+  "state_dir": "~/.local/state/nas-find",
+  "password_file": "~/.config/nas-find/password",
+  "plocate": "/usr/bin/plocate",
+  "updatedb": "/usr/sbin/updatedb.plocate",
+  "exclude_names": [".git", "node_modules", ".pnpm-store", ".venv", "__pycache__"],
+  "exclude_paths": [],
+  "update_interval": 3600,
+  "debounce_seconds": 30,
+  "reconcile_interval": 604800
+}

@@ -54,6 +54,7 @@ class Integration(unittest.TestCase):
         config_path = self.base / "config.json"
         config_path.write_text(json.dumps({
             "root": str(self.root), "state_dir": str(self.base / "state"),
+            "unc_prefix": "\\\\nas-test\\files",
             "password_file": str(self.base / "password"), "require_mount": False,
             "plocate": os.environ["PLOCATE_BIN"], "updatedb": os.environ["UPDATEDB_BIN"],
             "update_interval": .4, "debounce_seconds": .1,

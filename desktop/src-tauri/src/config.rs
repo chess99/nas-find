@@ -12,10 +12,10 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            server: "http://192.168.0.104:8765".into(),
-            share: r"\\192.168.0.104\Disk1".into(),
-            drive: "Z:".into(),
-            prefer_drive: true,
+            server: String::new(),
+            share: String::new(),
+            drive: String::new(),
+            prefer_drive: false,
         }
     }
 }
@@ -46,7 +46,30 @@ pub fn relative(value: &str) -> Result<String, String> {
 }
 
 impl Config {
+    pub fn import_connection(current: &Self, value: &serde_json::Value) -> Result<Self, String> {
+        let mut result = current.clone();
+        if let Some(incoming) = value.get("client_config") {
+            let incoming: Self = serde_json::from_value(incoming.clone())
+                .map_err(|_| "连接文件中的 client_config 无效")?;
+            if !result.share.eq_ignore_ascii_case(&incoming.share) {
+                result.drive = incoming.drive;
+                result.prefer_drive = incoming.prefer_drive;
+            }
+            result.server = incoming.server;
+            result.share = incoming.share;
+        }
+        if let Some(url) = value.get("url").and_then(|v| v.as_str()) {
+            result.server = url.into();
+        }
+        result
+            .validated()
+            .map_err(|e| format!("{e}；新机器请使用包含 client_config 的连接文件，或先手动配置"))
+    }
+
     pub fn validated(mut self) -> Result<Self, String> {
+        if self.server.trim().is_empty() || self.share.trim().is_empty() {
+            return Err("请填写搜索服务地址和 Samba 共享根路径".into());
+        }
         let server = url::Url::parse(self.server.trim()).map_err(|_| "服务地址格式不正确")?;
         if !matches!(server.scheme(), "http" | "https")
             || server.host_str().is_none()
@@ -70,7 +93,7 @@ impl Config {
             || matches!(parts[0], "." | "?")
             || parts[0].chars().any(|c| c < ' ' || "/:<>\"|?*".contains(c))
         {
-            return Err("请输入共享根路径，例如 \\\\192.168.0.104\\Disk1".into());
+            return Err("请输入共享根路径，例如 \\\\nas.example.internal\\files".into());
         }
         relative(parts[1])?;
         self.drive = self
@@ -98,6 +121,31 @@ impl Config {
         let root = if use_drive { &self.drive } else { &self.share };
         Ok((format!("{root}\\{tail}"), self.prefer_drive && !use_drive))
     }
+}
+
+#[cfg(test)]
+pub fn fixture() -> Config {
+    Config {
+        server: "http://nas.example.internal:8765".into(),
+        share: r"\\nas.example.internal\files".into(),
+        drive: "Z:".into(),
+        prefer_drive: true,
+    }
+}
+
+#[cfg(test)]
+pub fn live_config(access: Option<&serde_json::Value>) -> Config {
+    let value = if let Some(value) = access.and_then(|a| a.get("client_config")) {
+        value.clone()
+    } else {
+        let path = std::env::var("NAS_FIND_CLIENT_CONFIG")
+            .expect("Set NAS_FIND_CLIENT_CONFIG to an explicit client configuration JSON file");
+        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+    };
+    serde_json::from_value::<Config>(value)
+        .unwrap()
+        .validated()
+        .unwrap()
 }
 
 #[cfg(test)]
@@ -129,14 +177,14 @@ mod tests {
     }
     #[test]
     fn wrong_drive_falls_back_to_correct_unc() {
-        let c = Config::default();
+        let c = fixture();
         assert_eq!(
             c.resolve("a.txt", Some(&c.share)).unwrap(),
             (r"Z:\a.txt".into(), false)
         );
         assert_eq!(
             c.resolve("a.txt", Some(r"\\other\share")).unwrap(),
-            (r"\\192.168.0.104\Disk1\a.txt".into(), true)
+            (r"\\nas.example.internal\files\a.txt".into(), true)
         );
         assert_eq!(c.resolve("a.txt", None).unwrap().1, true);
     }
@@ -150,7 +198,7 @@ mod tests {
         ] {
             assert!(Config {
                 server: server.into(),
-                ..Config::default()
+                ..fixture()
             }
             .validated()
             .is_err());
@@ -158,10 +206,31 @@ mod tests {
         for share in [r"\\?\C:", r"\\.\pipe", r"C:\data", r"\\host\share\extra"] {
             assert!(Config {
                 share: share.into(),
-                ..Config::default()
+                ..fixture()
             }
             .validated()
             .is_err());
         }
+    }
+
+    #[test]
+    fn first_run_is_empty_and_saved_configuration_survives() {
+        let empty = Config::default();
+        assert!(empty.server.is_empty() && empty.share.is_empty() && !empty.prefer_drive);
+        assert!(empty.validated().is_err());
+        let saved = fixture();
+        let restored: Config =
+            serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+        assert_eq!(restored.validated().unwrap().share, saved.share);
+        let old_access = serde_json::json!({"url": saved.server});
+        assert!(Config::import_connection(&Config::default(), &old_access).is_err());
+        let migrated = Config::import_connection(&saved, &old_access).unwrap();
+        assert_eq!(migrated.drive, "Z:");
+        let incoming = serde_json::json!({"client_config":{"server":saved.server,"share":saved.share,"prefer_drive":false}});
+        assert_eq!(
+            Config::import_connection(&saved, &incoming).unwrap().drive,
+            "Z:"
+        );
+        assert!(Config::import_connection(&Config::default(), &incoming).is_ok());
     }
 }
