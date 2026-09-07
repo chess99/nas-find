@@ -107,7 +107,7 @@ export class Explorer {
     for(const item of items){if(item.separator){menu.append(document.createElement('hr'));continue;}const button=document.createElement('button');button.textContent=item.text;button.disabled=item.enabled===false;button.onclick=()=>{menu.remove();item.action();};menu.append(button);}document.body.append(menu);const dismiss=e=>{if(!menu.contains(e.target)){menu.remove();document.removeEventListener('pointerdown',dismiss,true);}};document.addEventListener('pointerdown',dismiss,true);
   }
   async openSystemMenu(request){
-    if(this.systemMenuBusy)return;this.systemMenuBusy=true;this.notify('正在准备系统菜单…');
+    if(this.systemMenuBusy)return;this.systemMenuBusy=true;
     try{await this.api.systemMenu(request);}catch(e){this.notify(String(e.message||e));}finally{this.systemMenuBusy=false;}
   }
   async bulk(mode,options={},captured=null){
