@@ -2,6 +2,7 @@
 mod bulk;
 mod config;
 mod native;
+mod system_menu;
 
 use config::Config;
 use serde::{Deserialize, Serialize};
@@ -384,7 +385,8 @@ fn main() {
             bulk::start_bulk,
             bulk::bulk_status,
             bulk::cancel_bulk,
-            bulk::reveal_export
+            bulk::reveal_export,
+            system_menu::show_system_menu
         ])
         .run(tauri::generate_context!())
         .expect("NAS Find 启动失败");
