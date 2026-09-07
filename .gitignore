@@ -6,6 +6,7 @@ dist/
 .pytest_cache/
 node_modules/
 target/
+desktop/src/shared/
 desktop/src-tauri/gen/
 desktop/src-tauri/icons/*
 !desktop/src-tauri/icons/source.svg

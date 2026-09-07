@@ -1,4 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+mod bulk;
 mod config;
 mod native;
 
@@ -22,6 +23,7 @@ struct AppState {
     file: PathBuf,
     stored: Mutex<Stored>,
     session: Mutex<Option<Session>>,
+    bulk: bulk::Jobs,
 }
 
 fn client() -> Result<reqwest::Client, String> {
@@ -172,6 +174,48 @@ async fn search(
 }
 
 #[tauri::command]
+async fn create_query(options: Value, state: State<'_, AppState>) -> Result<Value, String> {
+    let session = state.session()?;
+    let response = session
+        .client
+        .post(format!("{}/api/query", session.config.server))
+        .json(&options)
+        .send()
+        .await
+        .map_err(|_| "无法创建查询")?;
+    decode(response).await
+}
+
+#[tauri::command]
+async fn query_page(id: String, offset: u64, state: State<'_, AppState>) -> Result<Value, String> {
+    let session = state.session()?;
+    let response = session
+        .client
+        .get(format!("{}/api/query", session.config.server))
+        .query(&[
+            ("id", id),
+            ("offset", offset.to_string()),
+            ("limit", "500".into()),
+        ])
+        .send()
+        .await
+        .map_err(|_| "无法读取查询结果")?;
+    decode(response).await
+}
+
+#[tauri::command]
+async fn cancel_query(id: String, state: State<'_, AppState>) -> Result<(), String> {
+    let session = state.session()?;
+    let _ = session
+        .client
+        .post(format!("{}/api/query/cancel", session.config.server))
+        .json(&json!({"id":id}))
+        .send()
+        .await;
+    Ok(())
+}
+
+#[tauri::command]
 async fn refresh_index(state: State<'_, AppState>) -> Result<Value, String> {
     let session = state.session()?;
     let response = session
@@ -286,6 +330,7 @@ fn main() {
                 file,
                 stored: Mutex::new(stored.clone()),
                 session: Mutex::new(None),
+                bulk: Mutex::new(std::collections::HashMap::new()),
             };
             state.save(&stored).map_err(std::io::Error::other)?;
             app.manage(state);
@@ -332,7 +377,14 @@ fn main() {
             refresh_index,
             disconnect,
             file_action,
-            file_info
+            file_info,
+            create_query,
+            query_page,
+            cancel_query,
+            bulk::start_bulk,
+            bulk::bulk_status,
+            bulk::cancel_bulk,
+            bulk::reveal_export
         ])
         .run(tauri::generate_context!())
         .expect("NAS Find 启动失败");

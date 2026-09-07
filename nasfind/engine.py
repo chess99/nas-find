@@ -123,10 +123,10 @@ class Engine:
                         "successful_updates": self.metadata.get("successful_updates", 0) + 1}
             directories = {os.path.relpath(p, self.scope.root).replace(os.sep, "/") for p in self.watcher.directories()}
             os.chmod(candidate, 0o600)
-            os.replace(candidate, self.database)
-            atomic_json(self.state / "directories.json", sorted(directories))
-            atomic_json(self.state / "index.json", metadata)
             with self.lock:
+                os.replace(candidate, self.database)
+                atomic_json(self.state / "directories.json", sorted(directories))
+                atomic_json(self.state / "index.json", metadata)
                 self.index_dirs = directories
                 self.metadata = metadata
                 self.indexed_generation = generation
@@ -149,7 +149,8 @@ class Engine:
                     "dirty": self.generation > self.indexed_generation, "reason": self.reason,
                     "error": self.error, "watcher": self.watcher.status(),
                     "update_interval": self.config["update_interval"],
-                    "exclude_names": self.config["exclude_names"], "exclude_paths": self.config["exclude_paths"]}
+                    "exclude_names": self.config["exclude_names"], "exclude_paths": self.config["exclude_paths"],
+                    "unc_prefix": self.config["unc_prefix"]}
 
     def search(self, query, scope="", extension="", limit=100):
         if not self.database.exists():

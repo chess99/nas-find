@@ -13,6 +13,7 @@ from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlsplit
+from .queries import Queries
 
 LOG = logging.getLogger(__name__)
 STATIC = Path(__file__).parent / "static"
@@ -45,6 +46,7 @@ class Server(ThreadingHTTPServer):
 
     def __init__(self, address, engine):
         self.engine = engine
+        self.queries = Queries(engine)
         self.password = Path(engine.config["password_file"]).read_text().strip()
         if len(self.password) < 12:
             raise ValueError("登录密码至少需要 12 个字符")
@@ -64,6 +66,10 @@ class Server(ThreadingHTTPServer):
         except Exception:
             self.slots.release()
             raise
+
+    def server_close(self):
+        super().server_close()
+        self.queries.close()
 
     def process_request_thread(self, request, address):
         try:
@@ -109,7 +115,10 @@ class Handler(BaseHTTPRequestHandler):
         except (KeyError, cookies.CookieError):
             return False
         with self.server.auth_lock:
-            return self.server.sessions.get(token, 0) > time.time()
+            valid = self.server.sessions.get(token, 0) > time.time()
+            if valid:
+                self.owner = token
+            return valid
 
     def _allowed(self):
         address = ipaddress.ip_address(self.client_address[0])
@@ -128,10 +137,10 @@ class Handler(BaseHTTPRequestHandler):
             url = urlsplit(self.path)
             params = parse_qs(url.query, keep_blank_values=True)
             arg = lambda key, default="": params.get(key, [default])[0]
-            if url.path in ("/", "/app.js", "/style.css"):
-                name = {"/": "index.html", "/app.js": "app.js", "/style.css": "style.css"}[url.path]
+            if url.path in ("/", "/app.js", "/style.css", "/explorer.js", "/selection.js", "/explorer.css"):
+                name = "index.html" if url.path == "/" else url.path[1:]
                 body = (STATIC / name).read_bytes()
-                self._headers(200, {"index.html": "text/html", "app.js": "text/javascript", "style.css": "text/css"}[name] + "; charset=utf-8", len(body))
+                self._headers(200, ("text/javascript" if name.endswith(".js") else "text/css" if name.endswith(".css") else "text/html") + "; charset=utf-8", len(body))
                 if self.command != "HEAD":
                     self.wfile.write(body)
                 return
@@ -142,6 +151,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, engine.status())
             if url.path == "/api/search":
                 return self._json(200, engine.search(arg("q"), arg("scope"), arg("ext"), arg("limit", "100")))
+            if url.path == "/api/query":
+                return self._json(200, self.server.queries.page(self.owner, arg("id"), arg("offset", "0"), arg("limit", "500")))
+            if url.path == "/api/query/download":
+                with self.server.queries.download(self.owner, arg("token")) as stream:
+                    extension = "csv" if str(stream.name).endswith(".csv") else "txt"
+                    self._headers(200, ("text/csv" if extension == "csv" else "text/plain") + "; charset=utf-8", os.fstat(stream.fileno()).st_size,
+                                  {"Content-Disposition": "attachment; filename=nas-paths." + extension})
+                    if self.command != "HEAD":
+                        while chunk := stream.read(262144):
+                            self.wfile.write(chunk)
+                return
             if url.path == "/api/info":
                 return self._info(arg("path"))
             if url.path == "/api/preview":
@@ -169,7 +189,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.headers.get_content_type() != "application/json":
                 return self._json(415, {"error": "请求格式不支持"})
             length = int(self.headers.get("Content-Length", "0"))
-            if not 0 < length <= 4096:
+            if not 0 < length <= 1024 * 1024:
                 return self._json(400, {"error": "请求大小无效"})
             data = json.loads(self.rfile.read(length))
             if not isinstance(data, dict):
@@ -193,6 +213,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, {"ok": True}, {"Set-Cookie": f"nasfind_session={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000"})
             if not self._session():
                 return self._json(401, {"error": "请先登录"})
+            if path == "/api/query":
+                return self._json(202, self.server.queries.create(self.owner, data))
+            if path == "/api/query/cancel":
+                self.server.queries.cancel(self.owner, data.get("id"))
+                return self._json(200, {"ok": True})
+            if path == "/api/query/selection":
+                return self._json(200, self.server.queries.selected(self.owner, data))
+            if path == "/api/query/export":
+                return self._json(200, self.server.queries.prepare_export(self.owner, data))
             if path == "/api/refresh":
                 self.server.engine.changed("手动刷新", True)
                 return self._json(202, {"ok": True})
