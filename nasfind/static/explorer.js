@@ -20,13 +20,13 @@ export class Explorer {
     this.viewport.oncontextmenu=e=>e.preventDefault();
     this.viewport.onkeydown=e=>this.key(e);
     this.$('query').onkeydown=e=>{if(e.key==='ArrowDown'&&this.total){e.preventDefault();this.selection.choose(0);this.viewport.focus();this.scrollTo(0);}};
-    document.addEventListener('keydown',e=>{if(document.querySelector('dialog[open]')||e.isComposing)return;if(e.ctrlKey&&e.key.toLowerCase()==='f'){e.preventDefault();this.$('query').focus();this.$('query').select();}else if(e.key==='F5'){e.preventDefault();this.search();}});
+    document.addEventListener('keydown',e=>{if(document.querySelector('dialog[open]')||e.isComposing)return;if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='f'){e.preventDefault();this.$('query').focus();this.$('query').select();}else if(e.key==='F5'){e.preventDefault();this.search();}});
     this.$('cancel').onclick=()=>{this.cancelRequested=true;if(this.taskId)this.api.cancelBulk(this.taskId);};
     this.$('dismiss').onclick=()=>{this.$('task').hidden=true;};
     new ResizeObserver(()=>this.draw()).observe(this.viewport);
     this.updateSelection();
   }
-  notify(text){this.api.notify(text);}
+  notify(text){this.api.notify(this.api.platform==='macos'?text.replaceAll('Ctrl','⌘'):text);}
   setConnected(value){this.connected=value;this.root.querySelectorAll('.ex-search input,.ex-search select,.ex-search button').forEach(el=>el.disabled=!value);if(!value)this.invalidate();}
   invalidate(){clearTimeout(this.timer);clearTimeout(this.pollTimer);this.version++;if(this.id&&!this.ready)this.api.cancel(this.id).catch(()=>{});this.id=null;this.total=0;this.ready=false;this.selection.clear();this.cache.clear();this.inflight.clear();this.draw();}
   schedule(){this.invalidate();if(!this.composing)this.timer=setTimeout(()=>this.search(),250);}
@@ -48,7 +48,7 @@ export class Explorer {
   }
   put(offset,rows){this.cache.delete(offset);this.cache.set(offset,rows);while(this.cache.size>12)this.cache.delete(this.cache.keys().next().value);}
   async load(offset){
-    if(!this.id||this.inflight.has(offset)||this.inflight.size>=3)return;const version=this.version,id=this.id;
+    if(!this.id||!Number.isSafeInteger(offset)||offset<0||this.inflight.has(offset)||this.inflight.size>=3)return;const version=this.version,id=this.id;
     const pending=this.api.page(id,offset);this.inflight.set(offset,pending);
     try{const data=await pending;if(version!==this.version)return;this.put(offset,data.results);this.accept(data);}
     catch(e){if(version===this.version)this.fail(e);}
@@ -57,12 +57,14 @@ export class Explorer {
   file(index){return this.cache.get(Math.floor(index/PAGE)*PAGE)?.find(f=>f.index===index);}
   height(){return Math.min(MAX_HEIGHT,this.total*ROW);}
   visibleCount(){return Math.ceil(this.viewport.clientHeight/ROW);}
-  startIndex(){const height=this.height(),view=this.viewport.clientHeight;if(this.total*ROW<=MAX_HEIGHT)return Math.floor(this.viewport.scrollTop/ROW);return Math.floor(this.viewport.scrollTop/Math.max(1,height-view)*Math.max(0,this.total-this.visibleCount()));}
+  // WebKit rubber-band scrolling may report negative or beyond-bottom scrollTop.
+  scrollOffset(){return Math.max(0,Math.min(this.viewport.scrollTop,Math.max(0,this.height()-this.viewport.clientHeight)));}
+  startIndex(){const height=this.height(),view=this.viewport.clientHeight,top=this.scrollOffset();if(this.total*ROW<=MAX_HEIGHT)return Math.floor(top/ROW);return Math.floor(top/Math.max(1,height-view)*Math.max(0,this.total-this.visibleCount()));}
   scrollTo(index){const max=Math.max(0,this.height()-this.viewport.clientHeight);this.viewport.scrollTop=this.total*ROW<=MAX_HEIGHT?index*ROW:index/Math.max(1,this.total-this.visibleCount())*max;this.draw();}
   draw(){
     if(!this.viewport)return;this.$('space').style.height=`${this.height()}px`;const start=Math.min(this.startIndex(),Math.max(0,this.total-1)),end=Math.min(this.total,start+this.visibleCount()+8);
     this.$('empty').hidden=this.total>0;this.$('empty').textContent=this.id?(this.ready?'没有匹配结果':'正在准备结果…'):(this.connected?'正在准备查询…':'连接后即可浏览文件');
-    const layer=this.$('visible');layer.style.top=`${this.total*ROW<=MAX_HEIGHT?start*ROW:this.viewport.scrollTop}px`;layer.replaceChildren();
+    const layer=this.$('visible');layer.style.top=`${this.total*ROW<=MAX_HEIGHT?start*ROW:this.scrollOffset()}px`;layer.replaceChildren();
     const needed=new Set();
     for(let i=start;i<end;i++){
       const file=this.file(i),row=document.createElement('div');row.dataset.index=i;row.className='ex-row'+(this.selection.contains(i)?' selected':'');row.setAttribute('role','row');row.setAttribute('aria-rowindex',i+1);row.setAttribute('aria-selected',String(this.selection.contains(i)));
@@ -81,7 +83,7 @@ export class Explorer {
     for(const name of ['open','reveal'])this.$(name).disabled=!single;
     for(const name of ['copy','export'])this.$(name).disabled=!count||!this.ready||this.copyBusy;
     this.$('clear').disabled=!count;
-    this.$('selection').querySelector('span').textContent=count?`${this.selection.all?'已选择全部结果':'已选择'} ${count.toLocaleString()} 项${!this.ready?'，正在统计':''}`:'Ctrl+A 全选全部结果 · Ctrl+Shift+C 复制路径';
+    this.$('selection').querySelector('span').textContent=count?`${this.selection.all?'已选择全部结果':'已选择'} ${count.toLocaleString()} 项${!this.ready?'，正在统计':''}`:(this.api.platform==='macos'?'⌘A 全选全部结果 · ⌘⇧C 复制路径':'Ctrl+A 全选全部结果 · Ctrl+Shift+C 复制路径');
   }
   paint(){for(const row of this.$('visible').children){const selected=this.selection.contains(Number(row.dataset.index));row.classList.toggle('selected',selected);row.setAttribute('aria-selected',String(selected));}this.updateSelection();}
   async selectedFile(){if(this.selection.count(this.total)!==1)return null;let index=this.selection.focus;if(index<0||!this.selection.contains(index)){index=0;while(index<this.total&&!this.selection.contains(index))index++;}if(!this.file(index))await this.load(Math.floor(index/PAGE)*PAGE);return this.file(index);}
@@ -100,6 +102,7 @@ export class Explorer {
     if(single)items.push({text:'打开',action:()=>this.singleAction('open')},{text:'打开所在位置',action:()=>this.singleAction('reveal')},{text:'打开方式…',action:()=>this.singleAction('open_with')},{text:'复制文件',action:()=>this.singleAction('copy_file')},{separator:true});
     items.push({text:`复制路径${count>1?`（${count.toLocaleString()} 项）`:''}`,enabled:this.ready,action:()=>this.bulk('clipboard')},{text:'复制带引号的路径',enabled:this.ready,action:()=>this.bulk('clipboard',{quoted:true})},{text:'复制 UNC 路径',enabled:this.ready,action:()=>this.bulk('clipboard',{unc:true})},{text:'导出 TXT 路径清单',enabled:this.ready,action:()=>this.bulk('export')},{text:'导出 CSV 完整清单',enabled:this.ready,action:()=>this.bulk('export',{format:'csv'})});
     if(single)items.push({separator:true},{text:'属性 / 详情',action:()=>this.singleAction('properties')},{text:'在此目录内搜索',action:async()=>{const f=await this.selectedFile();this.$('scope').value=f.directory?f.path:f.path.slice(0,Math.max(0,f.path.lastIndexOf('/')));this.search();}});
+    if(this.api.platform==='macos'){const index=items.findIndex(item=>item.text==='打开方式…');if(index>=0)items.splice(index,1);}
     if(this.api.systemMenu){const request={id:this.id,selection:this.selection.payload()};items.push({separator:true},{text:'系统右键菜单…',enabled:this.ready&&!this.systemMenuBusy,action:()=>this.openSystemMenu(request)});}
     items.push({separator:true},{text:'取消选择',action:()=>{this.selection.clear();this.draw();}});
     if(this.api.menu){try{await this.api.menu(items);}catch(e){this.notify(String(e));}return;}

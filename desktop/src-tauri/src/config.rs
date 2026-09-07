@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 #[serde(default)]
 pub struct Config {
     pub server: String,
+    pub mount_path: String,
     pub share: String,
     pub drive: String,
     pub prefer_drive: bool,
@@ -13,6 +14,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             server: String::new(),
+            mount_path: String::new(),
             share: String::new(),
             drive: String::new(),
             prefer_drive: false,
@@ -52,8 +54,12 @@ impl Config {
             let incoming: Self = serde_json::from_value(incoming.clone())
                 .map_err(|_| "连接文件中的 client_config 无效")?;
             if !result.share.eq_ignore_ascii_case(&incoming.share) {
+                result.mount_path = incoming.mount_path.clone();
                 result.drive = incoming.drive;
                 result.prefer_drive = incoming.prefer_drive;
+            }
+            if result.mount_path.is_empty() {
+                result.mount_path = incoming.mount_path;
             }
             result.server = incoming.server;
             result.share = incoming.share;
@@ -96,6 +102,10 @@ impl Config {
             return Err("请输入共享根路径，例如 \\\\nas.example.internal\\files".into());
         }
         relative(parts[1])?;
+        #[cfg(target_os = "macos")]
+        {
+            self.prefer_drive = false;
+        }
         self.drive = self
             .drive
             .trim()
@@ -111,15 +121,48 @@ impl Config {
         if self.prefer_drive && self.drive.is_empty() {
             return Err("优先映射盘时需要填写盘符".into());
         }
+        if cfg!(target_os = "macos") {
+            self.prefer_drive = false;
+            if self.mount_path == "/" {
+                return Err("不能使用文件系统根目录作为 SMB 挂载路径".into());
+            }
+            self.mount_path = self.mount_path.trim_end_matches('/').into();
+            if !self.mount_path.is_empty()
+                && (!self.mount_path.starts_with('/')
+                    || self.mount_path.contains(['\0', '\r', '\n'])
+                    || self
+                        .mount_path
+                        .split('/')
+                        .skip(1)
+                        .any(|p| p.is_empty() || p == "." || p == ".."))
+            {
+                return Err("挂载路径应为绝对目录，例如 /Volumes/files".into());
+            }
+        }
         Ok(self)
     }
 
     pub fn resolve(&self, path: &str, mapping: Option<&str>) -> Result<(String, bool), String> {
-        let tail = relative(path)?;
-        let use_drive = self.prefer_drive
-            && mapping.is_some_and(|m| m.trim_end_matches('\\').eq_ignore_ascii_case(&self.share));
-        let root = if use_drive { &self.drive } else { &self.share };
-        Ok((format!("{root}\\{tail}"), self.prefer_drive && !use_drive))
+        #[cfg(target_os = "macos")]
+        {
+            let _ = mapping;
+            if self.mount_path.is_empty() {
+                return Err("请先在 Finder 连接 SMB，并填写本机挂载路径".into());
+            }
+            return Ok((
+                format!("{}/{}", self.mount_path, relative_posix(path)?),
+                false,
+            ));
+        }
+        #[cfg(windows)]
+        {
+            let tail = relative(path)?;
+            let use_drive = self.prefer_drive
+                && mapping
+                    .is_some_and(|m| m.trim_end_matches('\\').eq_ignore_ascii_case(&self.share));
+            let root = if use_drive { &self.drive } else { &self.share };
+            Ok((format!("{root}\\{tail}"), self.prefer_drive && !use_drive))
+        }
     }
 }
 
@@ -127,6 +170,7 @@ impl Config {
 pub fn fixture() -> Config {
     Config {
         server: "http://nas.example.internal:8765".into(),
+        mount_path: String::new(),
         share: r"\\nas.example.internal\files".into(),
         drive: "Z:".into(),
         prefer_drive: true,
@@ -176,6 +220,7 @@ mod tests {
         }
     }
     #[test]
+    #[cfg(windows)]
     fn wrong_drive_falls_back_to_correct_unc() {
         let c = fixture();
         assert_eq!(
@@ -232,5 +277,69 @@ mod tests {
             "Z:"
         );
         assert!(Config::import_connection(&Config::default(), &incoming).is_ok());
+    }
+}
+
+pub fn relative_posix(value: &str) -> Result<String, String> {
+    if value.is_empty()
+        || value.len() > 30000
+        || value.contains('\0')
+        || value
+            .split('/')
+            .any(|p| p.is_empty() || p == "." || p == "..")
+    {
+        return Err("文件路径无效".into());
+    }
+    Ok(value.into())
+}
+
+pub fn relative_native(value: &str) -> Result<String, String> {
+    if cfg!(target_os = "macos") {
+        relative_posix(value)
+    } else {
+        relative(value)
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod mac_tests {
+    use super::*;
+    #[test]
+    fn posix_names_and_mount_boundaries() {
+        let config = Config {
+            mount_path: "/Volumes/共享文件/".into(),
+            ..fixture()
+        }
+        .validated()
+        .unwrap();
+        assert_eq!(
+            config.resolve("资料/CON:财报?.txt", None).unwrap().0,
+            "/Volumes/共享文件/资料/CON:财报?.txt"
+        );
+        for path in [
+            "../outside",
+            "/outside",
+            "a/../b",
+            "a//b",
+            "a/./b",
+            "bad\0name",
+        ] {
+            assert!(config.resolve(path, None).is_err());
+        }
+        for mount in [
+            "/",
+            "relative/path",
+            "/Volumes/../tmp",
+            "/Volumes//files",
+            "/Volumes/./files",
+        ] {
+            assert!(Config {
+                mount_path: mount.into(),
+                ..fixture()
+            }
+            .validated()
+            .is_err());
+        }
+        assert!(fixture().resolve("file.txt", None).is_err());
     }
 }

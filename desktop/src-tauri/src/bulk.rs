@@ -61,7 +61,7 @@ pub async fn start_bulk(
     if csv && mode != "export" {
         return Err("CSV 清单请使用导出功能".into());
     }
-    let owner = window.hwnd().map_err(|_| "无法读取窗口")?.0 as isize;
+    let owner = native::owner(&window)?;
     let target = if mode == "export" {
         let folder = window
             .app_handle()
@@ -140,7 +140,7 @@ pub async fn reveal_export(
         .as_str()
         .ok_or("导出尚未完成")?
         .to_owned();
-    let owner = window.hwnd().map_err(|_| "无法获取窗口")?.0 as isize;
+    let owner = native::owner(&window)?;
     tauri::async_runtime::spawn_blocking(move || native::shell_action(&path, "reveal", owner))
         .await
         .map_err(|_| "无法打开导出位置")?
@@ -158,6 +158,11 @@ pub fn csv_line(config: &config::Config, path: &str, mapped: Option<&str>) -> St
         },
         path.replace('/', "\\")
     );
+    let windows = if cfg!(target_os = "macos") && !config.mount_path.is_empty() {
+        format!("{}/{}", config.mount_path, path)
+    } else {
+        windows
+    };
     format!(
         "\"{}\",\"./{}\"\r\n",
         windows.replace('"', "\"\""),
@@ -171,6 +176,18 @@ pub fn line(
     mapped: Option<&str>,
     quoted: bool,
 ) -> Result<String, String> {
+    if cfg!(target_os = "macos") && !config.mount_path.is_empty() {
+        let tail = config::relative_posix(path)?;
+        if tail.contains(['\r', '\n']) {
+            return Err("名称包含换行，请导出 CSV 完整清单".into());
+        }
+        let path = format!("{}/{}", config.mount_path, tail);
+        return Ok(if quoted {
+            format!("\"{path}\"\r\n")
+        } else {
+            format!("{path}\r\n")
+        });
+    }
     // Text export preserves Linux names. Opening a file still uses stricter Windows validation.
     if path.is_empty()
         || path.chars().any(|c| matches!(c, '\0' | '\r' | '\n' | '\\'))
@@ -210,8 +227,12 @@ async fn transfer(
     job: Arc<Job>,
 ) -> Result<(), String> {
     let mut config = session.config.clone();
+    if cfg!(target_os = "macos") && !unc && config.mount_path.is_empty() {
+        return Err("请填写本机 SMB 挂载路径，或选择复制 UNC 路径".into());
+    }
     if unc {
         config.prefer_drive = false;
+        config.mount_path.clear();
     }
     // Resolve mapping once for the whole operation, so one export cannot mix roots.
     let mapped = native::mapping(&config.drive);
@@ -228,7 +249,12 @@ async fn transfer(
     };
     if csv {
         if let Some(file) = temporary.as_mut() {
-            file.write_all("\u{feff}Windows样式路径,NAS相对路径\r\n".as_bytes())
+            let header = if cfg!(target_os = "macos") && !config.mount_path.is_empty() {
+                "\u{feff}macOS路径,NAS相对路径\r\n"
+            } else {
+                "\u{feff}Windows样式路径,NAS相对路径\r\n"
+            };
+            file.write_all(header.as_bytes())
                 .map_err(|_| "导出写入失败")?;
         }
     }
@@ -361,6 +387,11 @@ mod tests {
             client: crate::client().unwrap(),
             config: crate::config::Config {
                 server: format!("http://{address}"),
+                mount_path: if cfg!(target_os = "macos") {
+                    "/Volumes/files".into()
+                } else {
+                    String::new()
+                },
                 ..crate::config::fixture()
             },
         };
@@ -395,5 +426,25 @@ mod tests {
             "\\\\nas.example.internal\\files\\a.txt\r\n"
         );
         assert!(super::csv_line(&config, "a\nb\"c.txt", None).contains("\"./a\nb\"\"c.txt\""));
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod mac_tests {
+    #[test]
+    fn posix_export_preserves_names_and_csv_newlines() {
+        let config = crate::config::Config {
+            mount_path: "/Volumes/共享".into(),
+            ..crate::config::fixture()
+        };
+        assert_eq!(
+            super::line(&config, "资料/a b?.txt", None, false).unwrap(),
+            "/Volumes/共享/资料/a b?.txt\r\n"
+        );
+        assert!(super::line(&config, "a\nb", None, false).is_err());
+        assert_eq!(
+            super::csv_line(&config, "a\nb\"c", None),
+            "\"/Volumes/共享/a\nb\"\"c\",\"./a\nb\"\"c\"\r\n"
+        );
     }
 }

@@ -1,7 +1,15 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod bulk;
 mod config;
+#[cfg(windows)]
 mod native;
+#[cfg(target_os = "macos")]
+#[path = "native_macos.rs"]
+mod native;
+#[cfg(windows)]
+mod system_menu;
+#[cfg(target_os = "macos")]
+#[path = "system_menu_macos.rs"]
 mod system_menu;
 
 use config::Config;
@@ -29,6 +37,8 @@ struct AppState {
 
 fn client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
+        // NAS connections are direct; system HTTP/SOCKS proxies may not honor LAN CIDR exclusions.
+        .no_proxy()
         .cookie_store(true)
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(4))
@@ -65,7 +75,7 @@ async fn login(config: Config, password: String) -> Result<Session, String> {
         .json(&json!({"password": password}))
         .send()
         .await
-        .map_err(|_| "无法连接 NAS，请检查服务地址与网络")?;
+        .map_err(|error| if error.is_timeout() { "连接 NAS 超时，请检查网络与服务是否运行" } else { "无法连接 NAS，请检查服务地址、网络与系统局域网权限" })?;
     if response.status().as_u16() == 401 {
         return Err("密码不正确".into());
     }
@@ -96,7 +106,7 @@ impl AppState {
 #[tauri::command]
 fn bootstrap(state: State<AppState>) -> Value {
     let stored = state.stored.lock().unwrap();
-    json!({"config":stored.config,"remembered":stored.password.is_some()})
+    json!({"config":stored.config,"remembered":stored.password.is_some(),"platform":std::env::consts::OS})
 }
 
 #[tauri::command]
@@ -118,12 +128,7 @@ async fn connect(
     if password.is_empty() {
         return Err("请输入访问密码".into());
     }
-    let encrypted = if remember {
-        Some(native::protect(password.as_bytes(), false)?)
-    } else {
-        None
-    };
-    let session = login(config.clone(), password).await?;
+    let session = login(config.clone(), password.clone()).await?;
     let result = session
         .client
         .get(format!("{}/api/status", config.server))
@@ -131,10 +136,18 @@ async fn connect(
         .await
         .map_err(|_| "无法读取索引状态")?;
     let status = decode(result).await?;
+    let encrypted = if remember {
+        Some(native::protect(password.as_bytes(), false)?)
+    } else {
+        None
+    };
     state.save(&Stored {
         config: config.clone(),
         password: encrypted,
     })?;
+    if let Some(previous) = saved.password.as_ref() {
+        native::forget(previous);
+    }
     *state.session.lock().unwrap() = Some(session);
     Ok(json!({"status":status,"config":config,"mapping":native::mapping(&config.drive)}))
 }
@@ -233,8 +246,11 @@ async fn refresh_index(state: State<'_, AppState>) -> Result<Value, String> {
 async fn disconnect(state: State<'_, AppState>) -> Result<(), String> {
     let session = state.session.lock().unwrap().take();
     let mut saved = state.stored.lock().unwrap().clone();
-    saved.password = None;
+    let previous = saved.password.take();
     state.save(&saved)?;
+    if let Some(previous) = previous {
+        native::forget(&previous);
+    }
     if let Some(session) = session {
         let _ = session
             .client
@@ -254,10 +270,17 @@ async fn file_action(
     state: State<'_, AppState>,
 ) -> Result<Value, String> {
     let config = state.session()?.config;
-    let owner = window.hwnd().map_err(|_| "无法获取窗口")?.0 as isize;
+    let owner = native::owner(&window)?;
     let result = tauri::async_runtime::spawn_blocking(move || {
         let mapped = native::mapping(&config.drive);
         let (resolved, fallback) = config.resolve(&path, mapped.as_deref())?;
+        #[cfg(target_os = "macos")]
+        if matches!(
+            action.as_str(),
+            "open" | "reveal" | "open_with" | "properties" | "copy_file"
+        ) {
+            native::verify_share(&config, &resolved)?;
+        }
         match action.as_str() {
             "copy_path" => native::clipboard(&resolved, false, owner)?,
             "copy_unc" => native::clipboard(
@@ -280,7 +303,7 @@ async fn file_action(
 
 #[tauri::command]
 async fn file_info(path: String, state: State<'_, AppState>) -> Result<Value, String> {
-    config::relative(&path)?;
+    config::relative_native(&path)?;
     let session = state.session()?;
     let response = session
         .client
@@ -388,8 +411,14 @@ fn main() {
             bulk::reveal_export,
             system_menu::show_system_menu
         ])
-        .run(tauri::generate_context!())
-        .expect("NAS Find 启动失败");
+        .build(tauri::generate_context!())
+        .expect("NAS Find 启动失败")
+        .run(|_app, _event| {
+            #[cfg(target_os = "macos")]
+            if matches!(_event, tauri::RunEvent::Reopen { .. }) {
+                show(_app);
+            }
+        });
 }
 
 #[cfg(test)]
@@ -436,8 +465,12 @@ mod tests {
             let relative = item["path"].as_str().unwrap();
             let mapping = native::mapping(&config.drive);
             let (path, _) = config.resolve(relative, mapping.as_deref()).unwrap();
+            #[cfg(target_os = "macos")]
+            native::verify_share(&config, &path).unwrap();
             assert!(std::fs::metadata(path).unwrap().is_file());
+            #[cfg(windows)]
             let unc = format!("{}\\{}", config.share, config::relative(relative).unwrap());
+            #[cfg(windows)]
             assert!(std::fs::metadata(unc).unwrap().is_file());
             let excluded = decode(
                 session

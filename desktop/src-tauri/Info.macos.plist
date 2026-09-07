@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>NSAppleEventsUsageDescription</key><string>NAS Find 使用 Finder 显示共享文件的简介。</string>
+<key>NSLocalNetworkUsageDescription</key><string>NAS Find 连接局域网 NAS 搜索服务并访问 SMB 共享文件。</string>
+</dict></plist>

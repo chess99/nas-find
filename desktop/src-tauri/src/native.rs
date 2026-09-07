@@ -200,3 +200,9 @@ mod tests {
         assert!(super::protect(b"invalid", true).is_err());
     }
 }
+
+pub fn owner(window: &tauri::WebviewWindow) -> Result<isize, String> {
+    Ok(window.hwnd().map_err(|_| "无法获取窗口")?.0 as isize)
+}
+
+pub fn forget(_: &[u8]) {}
