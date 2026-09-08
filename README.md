@@ -1,21 +1,23 @@
 # NAS Find
 
+**在 Windows 和 Mac 上，快速找到 NAS 里的文件。**
+
 面向 Linux / NAS 的文件名搜索工具，提供网页界面和 Windows / macOS 桌面客户端。
 
 索引在 NAS 上维护，搜索结果按需传输。桌面客户端通过 SMB 共享（Windows UNC / 映射盘，macOS Finder 挂载目录），用系统默认应用打开原文件。
 
 ## 定位与取舍
 
-NAS Find 面向已有文件共享、主要按文件名查找的用户：希望在 NAS 上获得接近 Everything 的搜索和打开体验，同时保持部署简单、减少数据盘的多余访问。
+NAS Find 面向已有 SMB 共享、主要按文件名查找的用户：在电脑上搜索 NAS 文件，找到后直接用系统应用打开。
 
 | 工具 | 功能侧重 |
 |---|---|
-| [Everything](https://www.voidtools.com/support/everything/folder_indexing/) | Windows 本地快速搜索；支持网络文件夹索引，但机制不同于本地 NTFS 索引 |
+| [Everything](https://www.voidtools.com/support/everything/folder_indexing/) | Windows 文件搜索；扫描网络共享目录，在电脑上建立索引，支持变化监听与定时重扫 |
 | [kodbox](https://github.com/kalcaddle/kodbox) | 网盘与文件管理，包含在线编辑、分享和协作等功能 |
 | [sist2](https://github.com/sist2app/sist2) | 内容检索，提供文本与元数据提取、缩略图及可选 OCR 等能力 |
 | **NAS Find** | NAS 端文件名索引、快速浏览与批量路径操作，通过原有共享打开文件 |
 
-我们优先做好“找到文件，再打开它”：不在后台解析正文、EXIF 或音视频元数据，也不预生成缩略图，预览时才按需读取文件。可以接受新文件稍后出现在索引中，优先减少无变化时的目录遍历。
+NAS Find 只索引名称与路径，不在后台解析正文、EXIF 或音视频元数据，也不预生成缩略图。文件名变化合并后更新索引，预览和打开时才按需读取原文件。
 
 ## 功能
 
@@ -35,8 +37,6 @@ NAS Find 面向已有文件共享、主要按文件名查找的用户：希望�
 3. 在客户端填写自己的服务地址和共享路径，参阅[使用说明](docs/usage.md)。
 
 也可以把仓库交给 AI agent，要求它先读取 [AGENTS.md](AGENTS.md)，再按同一份部署文档执行。
-
-部署时需要指定索引目录、共享地址和访问网段；配置示例与服务模板见[部署文档](docs/deployment.md)。
 
 ## 适用范围
 
