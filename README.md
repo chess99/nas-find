@@ -32,8 +32,8 @@ NAS Find 只索引名称与路径，不在后台解析正文、EXIF 或音视频
 
 ## 开始使用
 
-1. 在 Linux 上准备 plocate 和索引目录，按[部署文档](docs/deployment.md)配置并启动服务。
-2. 使用浏览器访问服务，或按[开发文档](docs/development.md)构建 Windows 或 macOS 客户端。
+1. 按[部署文档](docs/deployment.md)在 NAS 上通过 Docker 或原生方式启动服务。
+2. 使用浏览器访问服务，或从 [Releases](https://github.com/chess99/nas-find/releases) 下载 Windows 64 位 / Mac M 系列安装包。本地构建见[开发文档](docs/development.md)。
 3. 在客户端填写自己的服务地址和共享路径，参阅[使用说明](docs/usage.md)。
 
 也可以把仓库交给 AI agent，要求它先读取 [AGENTS.md](AGENTS.md)，再按同一份部署文档执行。

@@ -58,6 +58,36 @@ docker compose --env-file examples/docker.env config --quiet
 
 GitHub 的 `Docker` 工作流在相关 PR/main 改动时构建并验证 AMD64 镜像；发布 `v*` 标签或手动运行工作流时，在测试通过后构建并推送 AMD64 / ARM64 镜像到 GHCR。手动 main 发布及不含 `-` 的稳定版本标签更新 `latest`；预发布标签与其他分支的手动构建只生成版本/提交标签。建议用户部署固定版本，维护者应按版本顺序发布稳定标签，避免旧标签覆盖 latest。
 
+## 客户端 Release
+
+`Client Release` 工作流构建两个安装包：
+
+| 系统 | 构建目标 | 安装包 |
+|---|---|---|
+| Windows 64 位（Intel / AMD） | `x86_64-pc-windows-msvc` | `NAS-Find_<版本>_windows-x64-setup.exe` |
+| macOS（Apple M 系列） | `aarch64-apple-darwin` | `NAS-Find_<版本>_macos-arm64.dmg` |
+
+在 GitHub 的 Actions 页选择 `Client Release`，点击 Run workflow 并选择分支，可构建测试包。完成后从该次运行的 Artifacts 下载 `client-windows-x64` 或 `client-macos-arm64`。
+
+正式发布时，将 `desktop/package.json`、`desktop/package-lock.json`、`desktop/src-tauri/tauri.conf.json`、`desktop/src-tauri/Cargo.toml` 和 `desktop/src-tauri/Cargo.lock` 中的客户端版本更新为同一个版本。锁文件只更新本项目包的版本；依赖升级单独进行。检查版本并运行发布脚本测试：
+
+```sh
+node scripts/release.mjs validate
+node --test scripts/release.test.mjs
+```
+
+提交版本改动后，创建并推送对应的 `v<版本号>` 标签。例如客户端版本为 `0.4.2` 时：
+
+```sh
+git tag -a v0.4.2 -m "NAS Find 0.4.2"
+git push origin main
+git push origin v0.4.2
+```
+
+标签会同时触发客户端 Release 和 Docker 镜像工作流。客户端工作流检查标签与版本文件一致，运行前端与原生测试，再构建安装包。两个平台均成功后，将安装包、`LICENSE` 和 `SHA256SUMS.txt` 上传至 Release，生成下载表格与更新说明，然后发布。
+
+带 `-` 的版本（例如 `0.4.3-rc.1`）发布为 Prerelease；稳定版本设为 Latest。发布失败留下的草稿可通过重新运行工作流继续上传；已经公开的版本保持不变，修改安装包时使用新版本号。工作流使用仓库自带的 `GITHUB_TOKEN`，只在上传 Release 的任务中申请写权限。
+
 ## Windows 构建
 
 准备 Node.js LTS、Rust stable、Microsoft C++ 构建工具和 Windows SDK。最终用户运行客户端需要 WebView2，不需要开发工具链。
