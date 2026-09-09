@@ -10,12 +10,12 @@
 
 NAS Find 面向已有 SMB 共享、主要按文件名查找的用户：在电脑上搜索 NAS 文件，找到后直接用系统应用打开。
 
-| 工具 | 优点 | 缺点 |
+| 工具 | 优点 | 取舍 |
 |---|---|---|
-| [Everything＋网络文件夹](https://www.voidtools.com/support/everything/folder_indexing/) | 无需部署 NAS 服务；建好索引后快速搜索，支持大小、日期筛选 | 仅支持 Windows；各台电脑分别配置和维护网络文件夹索引 |
-| **NAS Find** | 支持 Windows、Mac 和网页；NAS 本机维护索引，多设备共用一份索引 | 需要部署轻量 NAS 服务；暂不支持大小、日期筛选 |
-| [kodbox](https://github.com/kalcaddle/kodbox) | 在线编辑、分享与协作，文件管理功能完整 | 需要维护 Web 服务与数据库 |
-| [sist2](https://github.com/simon987/sist2) | 支持正文、元数据检索，以及缩略图和可选 OCR | 内容提取需要读取原文件；缩略图与 OCR 增加索引处理量 |
+| [Everything＋网络文件夹](https://www.voidtools.com/support/everything/folder_indexing/) | 无需部署 NAS 服务，支持大小和日期筛选 | 仅支持 Windows；每台电脑需分别维护索引 |
+| **NAS Find** | Windows、macOS 和网页共用 NAS 上的一份索引 | 需部署轻量服务；暂不支持大小和日期筛选 |
+| [kodbox](https://github.com/kalcaddle/kodbox) | 编辑、分享、协作和文件管理功能完整 | 需维护 Web 服务和数据库 |
+| [sist2](https://github.com/simon987/sist2) | 支持正文、元数据搜索、缩略图和可选 OCR | 内容提取和缩略图生成会增加索引处理量 |
 
 NAS Find 只索引名称与路径，不在后台解析正文、EXIF 或音视频元数据，也不预生成缩略图。文件名变化合并后更新索引，预览和打开时才按需读取原文件。
 
