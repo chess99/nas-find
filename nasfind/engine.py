@@ -157,7 +157,7 @@ class Engine:
             return {"results": [], "truncated": False, "pending": True}
         if len(query) > 300:
             raise ValueError("关键词过长")
-        scope = self.scope.relative(scope, allow_empty=True)
+        scope = self.scope.relative_scope(scope)
         if extension and not re.fullmatch(r"[\w-]{1,16}", extension):
             raise ValueError("无效扩展名")
         limit = max(1, min(int(limit), 200))

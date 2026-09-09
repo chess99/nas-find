@@ -107,6 +107,12 @@ class Scope:
             raise PermissionError("此目录不在搜索范围内")
         return value
 
+    def relative_scope(self, value):
+        """Normalize user-entered directory filters without changing indexed paths."""
+        if isinstance(value, str):
+            value = value.replace("\\", "/")
+        return self.relative(value, allow_empty=True)
+
     def available(self):
         return self.root.is_dir() and (not self.require_mount or os.path.ismount(self.root))
 

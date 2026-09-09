@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from nasfind.config import normalize, load, validate
+from nasfind.config import Scope, normalize, load, validate
 
 
 def profile(**values):
@@ -46,3 +46,13 @@ class ConfigurationTests(unittest.TestCase):
             path = Path(directory)/"config.json"
             path.write_text(json.dumps(profile()),encoding="utf-8-sig")
             self.assertEqual(load(path)["unc_prefix"], "\\\\nas-test\\files")
+
+    def test_directory_scope_accepts_windows_separators_without_weakening_file_paths(self):
+        scope = Scope(normalize(profile(require_mount=False)))
+        self.assertEqual(scope.relative_scope(r"media\Shows\Friends"), "media/Shows/Friends")
+        self.assertEqual(scope.relative_scope("media/Shows\\Friends"), "media/Shows/Friends")
+        with self.assertRaisesRegex(ValueError, "无效路径"):
+            scope.relative(r"media\Shows\Friends")
+        for value in (r"media\\Shows", r"..\Shows", r"\media\Shows"):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "无效路径"):
+                scope.relative_scope(value)

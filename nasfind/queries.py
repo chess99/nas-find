@@ -131,7 +131,7 @@ class Queries:
 
     def create(self, owner, data):
         query = data.get("query", "")
-        scope = self.engine.scope.relative(data.get("scope", ""), allow_empty=True)
+        scope = self.engine.scope.relative_scope(data.get("scope", ""))
         extension = data.get("extension", "")
         if not isinstance(extension, str):
             raise ValueError("扩展名格式无效")
