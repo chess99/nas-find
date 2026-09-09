@@ -98,7 +98,7 @@ class Engine:
             elif candidate.exists():
                 candidate.unlink()
             cmd = [self.config["updatedb"], "-U", str(self.scope.root), "-o", str(candidate),
-                   "-l", "0", "--prune-bind-mounts", "yes", "--prunefs", "",
+                   "-l", "0", "--prune-bind-mounts", "yes" if self.config.get("prune_bind_mounts", True) else "no", "--prunefs", "",
                    "--prunenames", " ".join(self.config["exclude_names"]), "--prunepaths", ""]
             for path in self.config["exclude_paths"]:
                 cmd += ["--add-single-prunepath", str(self.scope.root / path)]

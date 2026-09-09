@@ -4,7 +4,7 @@
 
 面向 Linux / NAS 的文件名搜索工具，提供网页界面和 Windows / macOS 桌面客户端。
 
-索引在 NAS 上维护，搜索结果按需传输。桌面客户端通过 SMB 共享（Windows UNC / 映射盘，macOS Finder 挂载目录），用系统默认应用打开原文件。
+索引在 NAS 本机统一维护，多个设备共用，客户端无需各自扫描共享目录建立索引。搜索结果按需传输，桌面客户端通过 SMB 共享（Windows UNC / 映射盘，macOS Finder 挂载目录），用系统默认应用打开原文件。
 
 ## 定位与取舍
 
@@ -12,8 +12,8 @@ NAS Find 面向已有 SMB 共享、主要按文件名查找的用户：在电脑
 
 | 工具 | 优点 | 缺点 |
 |---|---|---|
-| [Everything＋网络文件夹](https://www.voidtools.com/support/everything/folder_indexing/) | 无需部署 NAS 服务；建好索引后快速搜索，支持大小、日期筛选 | 仅支持 Windows；网络索引的扫描与更新依赖电脑运行并连接共享 |
-| **NAS Find** | 支持 Windows、Mac 和网页；NAS 本机维护索引，电脑关机后仍可更新 | 需要部署轻量 NAS 服务 |
+| [Everything＋网络文件夹](https://www.voidtools.com/support/everything/folder_indexing/) | 无需部署 NAS 服务；建好索引后快速搜索，支持大小、日期筛选 | 仅支持 Windows；各台电脑分别配置和维护网络文件夹索引 |
+| **NAS Find** | 支持 Windows、Mac 和网页；NAS 本机维护索引，多设备共用一份索引 | 需要部署轻量 NAS 服务；暂不支持大小、日期筛选 |
 | [kodbox](https://github.com/kalcaddle/kodbox) | 在线编辑、分享与协作，文件管理功能完整 | 需要维护 Web 服务与数据库 |
 | [sist2](https://github.com/simon987/sist2) | 支持正文、元数据检索，以及缩略图和可选 OCR | 内容提取需要读取原文件；缩略图与 OCR 增加索引处理量 |
 

@@ -1,0 +1,65 @@
+name: Docker
+
+on:
+  pull_request:
+    paths: ['nasfind/**', 'docker/**', 'tests/**', 'Dockerfile', '.dockerignore', 'compose.yaml', 'examples/docker.env', 'examples/unraid/**', '.github/workflows/docker.yml']
+  push:
+    branches: [main]
+    paths: ['nasfind/**', 'docker/**', 'tests/**', 'Dockerfile', '.dockerignore', 'compose.yaml', 'examples/docker.env', 'examples/unraid/**', '.github/workflows/docker.yml']
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t nas-find:test .
+      - name: Linux unit and integration tests
+        run: >-
+          docker run --rm --user 1000:1000 --entrypoint python3
+          -e PLOCATE_BIN=/usr/bin/plocate -e UPDATEDB_BIN=/usr/sbin/updatedb.plocate
+          --mount type=bind,src="$PWD",dst=/workspace,readonly -w /workspace
+          nas-find:test -m unittest discover -s tests -v
+      - name: Container lifecycle smoke test
+        run: python3 docker/smoke.py nas-find:test
+      - name: Validate deployment templates
+        run: |
+          docker compose --env-file examples/docker.env config --quiet
+          python3 -c "import xml.etree.ElementTree as E; E.parse('examples/unraid/nas-find.xml')"
+
+  publish:
+    needs: test
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || (startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, '-')) }}
+            type=ref,event=tag
+            type=sha
+          flavor: latest=false
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

@@ -1,6 +1,6 @@
 # 部署与维护
 
-本文供人和 AI agent 共用。示例路径和主机名仅用于说明，应根据目标环境填写，不能把仓库默认值当作已经确认的部署信息。
+本文介绍 Docker 和原生 Linux 部署的安装、配置、更新与排障。示例中的路径、主机名和网段需替换为自己的环境信息。
 
 ## 先确认环境
 
@@ -13,13 +13,90 @@
 | 文件访问 | UNC 共享根路径，以及 Windows 上可选的映射盘 / macOS 上实际的 SMB 挂载目录 |
 | 已有部署 | 配置、密码、服务和索引是否已存在；更新时应保留哪些内容 |
 
-可以通过只读检查获得的信息先检查；仍缺少的目标或凭据来源再向用户询问。单纯准备文档不需要连接机器、安装软件或重启服务。
-
 ## 部署方式
 
-服务本身通过配置文件运行，不依赖远程部署脚本。项目提供[配置示例](../examples/server-config.json)和 [systemd 用户服务模板](../examples/nas-find.service)；用户或 AI agent 可按自己的发行版准备依赖、传输代码，再采用下面的启动方式。
+支持 Docker 和原生 Python + systemd 两种部署方式。Docker 部署中，Ubuntu / Debian 等 Linux 使用 Compose，Unraid 使用安装模板，两者共用同一镜像。
 
-`deploy.py` 是可选的通用 SSH 部署工具，要求显式提供 `--host` 和 `--config`。它复用目标机器已经准备好的 Python 3.12+、plocate 和 systemd，不自动安装软件包或推测权限设置；用户或 agent 也可以按本文手动部署。
+## Docker 部署（Ubuntu / 通用 Linux）
+
+镜像包含 Python 3.12、plocate 和网页，无需在宿主安装这些依赖。需要安装 Docker Engine 与 Compose v2。下面按源码构建部署；镜像构建与发布流程见[开发文档](development.md)。
+
+一个实例索引一个 SMB 共享根目录。准备宿主上的共享数据目录、对应的 SMB 共享根路径，以及索引范围外的独立配置目录。
+
+在 Linux 上获取源码后执行：
+
+```sh
+git clone https://github.com/chess99/nas-find.git
+cd nas-find
+mkdir -p .local
+cp -n examples/docker.env .local/docker.env
+id -u
+id -g
+```
+
+编辑 `.local/docker.env`，将示例值全部换成自己的目录、IP、网段、共享名和 UID/GID。`NAS_FIND_BIND_IP` 为 NAS 实际局域网 IP；`NAS_FIND_ALLOWED_NETWORKS` 为允许访问的客户端网段，多个网段用逗号分隔。UNC 值保留示例的单引号，不要额外增加反斜杠。运行用户/组需要有数据目录的遍历和读取权限。
+
+确认数据目录已经存在且数据盘已挂载；另外手动创建环境文件中填写的专用配置目录，例如 `mkdir -p /实际配置目录`。Compose 不会自动创建缺失的目录，以免路径填错后扫描空目录。然后在仓库根目录启动：
+
+```sh
+docker compose --env-file .local/docker.env up -d --build
+docker compose --env-file .local/docker.env ps
+docker compose --env-file .local/docker.env logs --tail=50
+```
+
+首次启动会生成配置目录中的 `config.json`、`password` 和 `state/`。用自己的运行账号或管理员读取宿主配置目录中的 `password`，然后访问 `http://<NAS局域网IP>:<端口>` 登录。密码不会写入容器日志，也不需要放进环境变量。首次索引可能耗时较长，Docker 显示 `healthy` 仅表示 HTTP 服务可访问，索引是否完成以网页登录后的状态为准。
+
+| 映射 / 参数 | 行为 |
+|---|---|
+| 数据目录 → `/data:ro` | 只读访问源文件，支持搜索、网页预览和下载 |
+| 专用目录 → `/config:rw` | 保存配置、密码、索引和查询缓存，建议放系统 SSD |
+| `PUID` / `PGID` | 服务进程运行的用户和组，需要有数据目录的遍历和读取权限 |
+| `NAS_FIND_UNC_PREFIX` | 与 `/data` 对应的 SMB 根路径；每次启动以显式环境变量覆盖保存值 |
+| `NAS_FIND_ALLOWED_NETWORKS` | 每次启动以显式环境变量覆盖；自动加入容器内部健康检查使用的回环网段 |
+
+停止容器后，可编辑 `config.json` 的 `exclude_paths`、`exclude_names`、`update_interval`、`debounce_seconds`、`reconcile_interval` 等高级项，再启动容器。容器内的目录、监听端口和程序路径由镜像固定，宿主路径与访问端口通过 Compose 映射设置。更改环境文件后使用 `up -d` 重建容器，`restart` 不会加载新环境变量。
+
+自定义登录密码时，在首次启动前将至少 12 个字符的密码写入配置目录的 `password`，文件权限设为仅运行 UID 可读写。
+
+更改 PUID/PGID 前，先停止容器，再将专用配置目录及其文件的属主调整为新的 UID/GID，否则服务可能无法读取原有配置和索引。
+
+容器启动时设置专用配置目录属主，然后以 PUID/PGID 指定的用户运行服务。也可事先准备目录权限，通过 Docker `--user UID:GID` 直接指定运行用户，此时忽略 PUID/PGID。
+
+### Unraid 安装
+
+使用同一镜像，通过网页配置目录和变量。安装模板在 [examples/unraid/nas-find.xml](../examples/unraid/nas-find.xml)。
+
+1. 将模板复制到 Unraid 的 `/boot/config/plugins/dockerMan/templates-user/my-nas-find.xml`。在 Docker 页选择 Add Container，再从 Template 下拉框选择 `nas-find`。
+2. 索引目录填写实际 `/mnt/user/<共享名>`，保持只读；配置目录使用索引范围外的独立 appdata 子目录，建议将 appdata 放到 SSD 池。
+3. 填写与索引目录对应的 SMB 根路径、实际可信网段和端口。模板默认 UID/GID 为常见的 `99:100`，仍需核实目录权限。启动后从 appdata 中的 `password` 读取密码登录。
+
+也可以在 Unraid 本机获取源码并执行 `docker build -t nas-find:local .`，然后将模板 Repository 改为 `nas-find:local`，使用本机构建的镜像。
+
+在 Unraid 上，如果通过 SMB 修改文件或 Mover 搬移后搜索结果没有更新，可在网页手动更新；也可停止容器后将 `reconcile_interval` 改为 `3600` 等合适间隔进行定期校验。设置为 `3600` 会每小时检查目录，可能唤醒机械盘；没有触发文件事件的变化会在校验后显示。
+
+### Docker 更新与排障
+
+- 数据应直接来自 NAS 本机存储。容器映射的远程 SMB/NFS 客户端挂载不一定收到其他机器的变化通知；这类目录需手动更新或缩短兜底校验间隔。
+- 开机时先挂载数据盘或启动 Unraid 阵列，再启动容器。磁盘掉线时停止容器，恢复挂载后重建容器，避免扫描到挂载点下的空目录。
+- 容器会索引映射范围内可见的嵌套挂载，不需要的子目录通过 `exclude_paths` 排除。原生部署需要搜索 bind mount 时，将 `prune_bind_mounts` 设为 `false`。
+- 数据目录权限不足时，检查 PUID/PGID。若读取权限来自另一个组，改用该组的 PGID，或为运行用户授予读取权限。
+- HTTP 端口只用于可信局域网。Docker bridge 通常保留局域网客户端 IP，但代理可能改变来源；遇到 403 先检查实际来源和网段配置。Docker 发布端口与宿主防火墙的交互不同于原生服务，不能只依赖 UFW 的普通入站规则；限定绑定地址并避免路由器公网转发。
+- 大目录监听报额度不足时，在 Linux 宿主检查并调整 `fs.inotify.max_user_watches` / `max_user_instances`；容器共用宿主内核额度。
+
+源代码构建的更新：记录当前 Git 提交和镜像 ID，备份专用配置目录，获取新版本后再次执行 `up -d --build`。若使用已发布镜像，把环境文件中的 `NAS_FIND_IMAGE` 设为固定版本，再执行：
+
+```sh
+docker compose --env-file .local/docker.env pull
+docker compose --env-file .local/docker.env up -d --no-build
+```
+
+首次使用发布镜像同样采用这两条命令。Unraid 在 Docker 页更新容器。更新时保留 `/config` 的宿主目录和路径映射，以继续使用原有配置、密码及索引；回滚时恢复之前记录的镜像版本和必要的配置备份。
+
+## 原生部署
+
+准备 Python 3.12+、plocate 和 systemd 后，将源码放到目标机器，按[配置示例](../examples/server-config.json)填写配置，使用 [systemd 用户服务模板](../examples/nas-find.service)启动服务。
+
+通过 SSH 部署时，可使用 `deploy.py`，指定 `--host` 和 `--config`。目标机器需事先安装上述依赖。
 
 将配置示例复制为自己的本地配置并填好后，从仓库根目录执行：
 
@@ -68,7 +145,7 @@ mkdir -p ~/.config/nas-find
 cp -n examples/server-config.json ~/.config/nas-find/config.json
 ```
 
-这里的 `cp -n` 会保留已经存在的配置。配置字段以示例文件为准，文档不重复维护第二份 JSON。
+`cp -n` 会保留已经存在的配置，完整配置字段见示例文件。
 
 模板只允许 NAS 本机访问，便于先验证。需要局域网直接访问时，将 `bind` 改为 NAS 的实际局域网地址，并把 `allowed_networks` 改为实际可信网段；两个字段都要配置。服务目前按可信局域网 HTTP 设计，不能直接当成互联网公开服务。
 
@@ -99,11 +176,11 @@ systemctl --user enable --now nas-find
 
 ## 客户端和验收
 
-通过网页登录验证服务；若只监听回环地址，可先使用 SSH 本地转发测试。Windows / macOS 客户端的构建安装见[开发文档](development.md)。首次启动时服务和共享地址为空，需填写自己的连接信息；已有用户保存的地址和映射盘不会被新默认值覆盖。
+通过网页登录验证服务；若只监听回环地址，可先使用 SSH 本地转发测试。Windows / macOS 客户端的构建安装见[开发文档](development.md)。首次启动客户端时，填写服务地址和共享路径。
 
 脚本生成的 `.local/access.json` 含 `client_config` 和密码，可在退出客户端后通过安装脚本的 `-ImportExistingConnection` 导入。同一共享会保留客户端已有的映射盘偏好。旧的、只含 URL 的连接文件可用于已配置客户端；新机器需补齐共享信息或手动配置。
 
-macOS 用 Finder 连接该 SMB 共享，并在客户端填写实际的 `/Volumes/...` 挂载路径；SSH 登录不等于 SMB 登录。服务器和共享名需与客户端配置一致，索引服务继续运行在 NAS/Linux 上。
+macOS 用 Finder 连接该 SMB 共享，并在客户端填写实际的 `/Volumes/...` 挂载路径。服务器和共享名需与客户端配置一致。
 
 验收至少包括：已知文件与排除项、名称 / 路径匹配区别、超过一页的结果、跨页选择、复制 / 导出数量，以及通过配置的共享打开原文件。使用自有测试文件，避免为验收重启整个 NAS。
 
@@ -125,4 +202,4 @@ systemctl --user restart nas-find
 
 连接失败先检查地址、端口、来源网段和服务状态；索引不可用检查挂载与目录权限；监听异常检查 inotify 额度和日志；查询过期则重新搜索，不把旧选择套用到新结果。
 
-运行状态和查询缓存位于 `state_dir`，不是数据目录。不要为清理缓存误删源文件；文档修改本身不要求重启服务或重建索引。
+运行状态和查询缓存保存在 `state_dir`，与源文件所在的数据目录分开。

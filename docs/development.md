@@ -38,6 +38,26 @@ Linux 本地目录 → inotify 变化通知 → plocate 索引
 
 查询快照使用系统 SSD 上的临时 SQLite 文件，不依赖独立数据库服务。缓存、页大小和任务额度以 `queries.py` 为准；更改这些额度时同步更新相关文档。
 
+## Docker 构建与发布验证
+
+Docker 部署步骤见[部署文档](deployment.md)。镜像以 Ubuntu 24.04 为基础，包含服务端、容器入口和许可证；构建上下文由 `.dockerignore` 的允许列表控制。
+
+在原生 Linux Docker 主机上执行：
+
+```sh
+docker build -t nas-find:local .
+docker run --rm --user 1000:1000 --entrypoint python3 \
+  -e PLOCATE_BIN=/usr/bin/plocate -e UPDATEDB_BIN=/usr/sbin/updatedb.plocate \
+  --mount type=bind,src="$PWD",dst=/workspace,readonly -w /workspace \
+  nas-find:local -m unittest discover -s tests -v
+python3 docker/smoke.py nas-find:local
+docker compose --env-file examples/docker.env config --quiet
+```
+
+集成测试使用真实 plocate / inotify。容器验收脚本使用临时合成数据，覆盖登录、搜索、排除项、非 root 进程、只读源目录、创建/改名/删除通知、空闲不更新、重启后的密码与索引保留、健康检查和优雅停止。脚本要求原生 Linux Docker 主机，以测试本地目录的 inotify 事件。
+
+GitHub 的 `Docker` 工作流在相关 PR/main 改动时构建并验证 AMD64 镜像；发布 `v*` 标签或手动运行工作流时，在测试通过后构建并推送 AMD64 / ARM64 镜像到 GHCR。手动 main 发布及不含 `-` 的稳定版本标签更新 `latest`；预发布标签与其他分支的手动构建只生成版本/提交标签。建议用户部署固定版本，维护者应按版本顺序发布稳定标签，避免旧标签覆盖 latest。
+
 ## Windows 构建
 
 准备 Node.js LTS、Rust stable、Microsoft C++ 构建工具和 Windows SDK。最终用户运行客户端需要 WebView2，不需要开发工具链。
@@ -92,7 +112,7 @@ UPDATEDB_BIN=/path/to/updatedb.plocate \
 python3 -m unittest discover -s tests -v
 ```
 
-两端前端测试执行 `npm test`，Windows Rust 测试执行 `build.ps1 test`，macOS 执行 `./build.sh test`。Mac 的忽略测试可用明确的 `NAS_FIND_ACCESS_FILE` 加 `cargo test --manifest-path src-tauri/Cargo.toml -- --ignored` 执行，包含真实 NAS/SMB 检查与可删除的钥匙串测试凭据。没有 Linux 工具环境时，Python 集成测试会跳过；这不代表集成测试已经通过。
+两端前端测试执行 `npm test`，Windows Rust 测试执行 `build.ps1 test`，macOS 执行 `./build.sh test`。Mac 的忽略测试可用明确的 `NAS_FIND_ACCESS_FILE` 加 `cargo test --manifest-path src-tauri/Cargo.toml -- --ignored` 执行，包含真实 NAS/SMB 检查与可删除的钥匙串测试凭据。没有 Linux 工具环境时，Python 集成测试会跳过。
 
 | 改动 | 重点验证 |
 |---|---|
@@ -104,18 +124,16 @@ python3 -m unittest discover -s tests -v
 
 真实部署验证使用明确授权的目标与自有测试数据。NAS 冒烟测试通过 `NAS_FIND_ACCESS_FILE` 读取私有连接文件中的 `client_config`；也可通过 `NAS_FIND_CLIENT_CONFIG` 指向独立的[客户端配置](../examples/client-config.json)。系统菜单测试另需 `NAS_MENU_TEST_PATH`，可用 `NAS_MENU_EXPECT_LABEL` 指定预期应用菜单文字，不假设已安装某个播放器。
 
-## 开源发布准备
+## 配置与发布约定
 
-项目维护程序、配置接口、示例文件和部署步骤。依赖安装、SSH 连接、目录选择可由用户或 agent 按目标环境完成；通用远程部署脚本是便利工具，不是运行服务的前提。
-
-环境配置已从固定的开发机器默认值中分离：
+各组件的环境配置入口：
 
 | 位置 | 当前行为 |
 |---|---|
 | `nasfind/config.py` | 索引根目录与 UNC 根路径必填；默认只允许回环网段，特定目录排除默认为空，程序可按配置路径或 PATH 查找 |
 | `desktop/src-tauri/src/config.rs` | 首次连接信息为空；已有保存配置照常读取，导入同一共享时保留映射盘偏好 |
 | `deploy.py`、`scripts/deploy_remote.py` | SSH 目标与配置必填，检查已准备的依赖，执行测试和版本切换；默认保留现有有效配置，激活失败回滚 |
-| 真实连接测试 | 明确读取测试连接文件，可指定应出现的系统菜单，不再借用开发者环境 |
+| 真实连接测试 | 从测试连接文件读取目标信息，可指定应出现的系统菜单 |
 
 部署检查、首次配置、配置继承、显式更新和失败回滚由本地隔离测试覆盖。普通测试不连接真实 NAS，也不调用 systemd 修改宿主服务。
 
@@ -127,10 +145,10 @@ python3 -m unittest discover -s tests -v
 | 合成测试数据、经过整理的调研与验证记录 | 密码、私钥、访问令牌、私人文件清单与原始截图 |
 | 确实需要维护的第三方源码补丁及原许可证 | 下载的软件包、编译工具、索引数据库、缓存、构建产物 |
 
-配置示例放在 `examples/`，实际配置和个人脚本可放在被忽略的 `.local/`。公开部署脚本只维护通用流程，不包含开发者的目标地址。源码里的 `vendor/` 补丁与本机下载的工具缓存不是一回事。
+配置示例放在 `examples/`，实际配置、个人脚本和下载的工具缓存放在被忽略的 `.local/`。需要随项目维护的第三方源码补丁放在 `vendor/`，并保留原许可证。
 
 项目原创代码采用 [AGPL-3.0-only](../LICENSE)，第三方代码保留各自许可。发布构建产物时应附带许可说明并按要求提供对应源码；对外运行修改版网络服务时，应按 AGPL 提供源码获取入口。
 
-发布前检查历史中的凭据和私人文件清单。普通用户名、文件数量或内网地址本身通常不需要专门重写历史；公开示例用通用值，主要是方便别人部署。
+发布前检查历史中的凭据和私人文件清单，公开示例使用通用路径和主机名。
 
 不要提交 `.local/`、凭据、真实文件清单、日志、`node_modules/`、`target/` 或生成的共用前端副本。提交前检查暂存区，只包含本次修改；并行任务的改动保留原状。

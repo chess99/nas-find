@@ -1,0 +1,10 @@
+**
+!Dockerfile
+!LICENSE
+!nasfind/
+!nasfind/**
+!docker/
+!docker/entrypoint.py
+!docker/healthcheck.py
+**/__pycache__/
+**/*.pyc

@@ -1,0 +1,26 @@
+services:
+  nas-find:
+    image: ${NAS_FIND_IMAGE:-nas-find:local}
+    build: .
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 45s
+    ports:
+      - "${NAS_FIND_BIND_IP:?请填写 NAS 的局域网 IP}:${NAS_FIND_PORT:-8765}:8765"
+    environment:
+      PUID: ${PUID:?请填写运行用户 UID}
+      PGID: ${PGID:?请填写运行用户 GID}
+      NAS_FIND_UNC_PREFIX: ${NAS_FIND_UNC_PREFIX:?请填写 SMB 共享根路径}
+      NAS_FIND_ALLOWED_NETWORKS: ${NAS_FIND_ALLOWED_NETWORKS:?请填写允许访问的局域网网段}
+    volumes:
+      - type: bind
+        source: ${NAS_FIND_DATA_DIR:?请填写数据目录绝对路径}
+        target: /data
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${NAS_FIND_CONFIG_DIR:?请填写配置目录绝对路径}
+        target: /config
+        bind:
+          create_host_path: false

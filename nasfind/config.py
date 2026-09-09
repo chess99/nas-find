@@ -2,6 +2,7 @@ import json
 import os
 import ipaddress
 import math
+import re
 import shutil
 from pathlib import Path
 
@@ -35,7 +36,7 @@ def validate(config):
     for key in ("exclude_names", "exclude_paths"):
         if key in config and (not isinstance(config[key], list) or any(not isinstance(p, str) or not p or "\0" in p for p in config[key])):
             raise ValueError(f"{key} 必须是目录字符串列表")
-    for key in ("require_mount",):
+    for key in ("require_mount", "prune_bind_mounts"):
         if key in config and type(config[key]) is not bool:
             raise ValueError(f"{key} 必须是布尔值")
     for key in ("update_interval", "debounce_seconds", "reconcile_interval", "query_timeout", "scan_timeout"):
@@ -51,6 +52,7 @@ def normalize(config):
     defaults = {
         "bind": "127.0.0.1", "port": 8765,
         "require_mount": True,
+        "prune_bind_mounts": True,
         "state_dir": "~/.local/state/nas-find",
         "password_file": "~/.config/nas-find/password",
         "plocate": "plocate", "updatedb": "updatedb.plocate",
@@ -81,6 +83,24 @@ def normalize(config):
 
 def load(path):
     return normalize(json.loads(Path(path).read_text(encoding="utf-8-sig")))
+
+
+def is_mountpoint(path):
+    """Also recognize same-device Linux bind mounts missed by os.path.ismount."""
+    if os.path.ismount(path):
+        return True
+    try:
+        target = os.path.realpath(path)
+        for line in Path("/proc/self/mountinfo").read_text(encoding="utf-8", errors="surrogateescape").splitlines():
+            fields = line.split()
+            if len(fields) < 6:
+                continue
+            mount = re.sub(r"\\([0-7]{3})", lambda m: chr(int(m[1], 8)), fields[4])
+            if mount == target:
+                return True
+    except OSError:
+        pass
+    return False
 
 
 class Scope:
@@ -114,7 +134,7 @@ class Scope:
         return self.relative(value, allow_empty=True)
 
     def available(self):
-        return self.root.is_dir() and (not self.require_mount or os.path.ismount(self.root))
+        return self.root.is_dir() and (not self.require_mount or is_mountpoint(self.root))
 
     def open(self, relative, directory=False):
         """Walk with directory descriptors: symlinks cannot escape the allowed root."""

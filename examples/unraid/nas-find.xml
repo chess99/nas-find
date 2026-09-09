@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Container version="2">
+  <Name>nas-find</Name>
+  <Repository>ghcr.io/chess99/nas-find:latest</Repository>
+  <Registry>https://github.com/chess99/nas-find/pkgs/container/nas-find</Registry>
+  <Network>bridge</Network>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/chess99/nas-find/issues</Support>
+  <Project>https://github.com/chess99/nas-find</Project>
+  <Overview>NAS 文件名搜索，提供网页和 Windows / macOS 客户端。数据目录只读。首次启动后从配置目录的 password 文件读取登录密码。请填写实际共享目录、SMB 根路径和可信网段。</Overview>
+  <Category>Tools:</Category>
+  <WebUI>http://[IP]:[PORT:8765]/</WebUI>
+  <ExtraParams>--init --stop-timeout=45</ExtraParams>
+  <Config Name="网页端口" Target="8765" Default="8765" Mode="tcp" Description="局域网访问端口" Type="Port" Display="always" Required="true" Mask="false">8765</Config>
+  <Config Name="索引共享目录" Target="/data" Default="" Mode="ro" Description="填写已存在的 /mnt/user/共享名；一个实例对应一个共享" Type="Path" Display="always" Required="true" Mask="false"/>
+  <Config Name="配置与索引" Target="/config" Default="/mnt/user/appdata/nas-find" Mode="rw" Description="专用持久目录，建议 appdata 放在 SSD 池；不要位于索引范围内" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/nas-find</Config>
+  <Config Name="运行用户 UID" Target="PUID" Default="99" Mode="" Description="Unraid 常用 nobody UID；须有数据读取权限" Type="Variable" Display="advanced" Required="true" Mask="false">99</Config>
+  <Config Name="运行组 GID" Target="PGID" Default="100" Mode="" Description="Unraid 常用 users GID；按实际权限调整" Type="Variable" Display="advanced" Required="true" Mask="false">100</Config>
+  <Config Name="SMB 共享根路径" Target="NAS_FIND_UNC_PREFIX" Default="" Mode="" Description="例如 \\nas.example.internal\files，必须对应索引目录" Type="Variable" Display="always" Required="true" Mask="false"/>
+  <Config Name="允许访问的网段" Target="NAS_FIND_ALLOWED_NETWORKS" Default="" Mode="" Description="填写实际局域网 CIDR，多个网段用逗号分隔" Type="Variable" Display="always" Required="true" Mask="false"/>
+</Container>
