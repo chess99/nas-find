@@ -1,0 +1,11 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <activity android:name="net.chess99.nasfind.TestOpenActivity" android:exported="true" android:label="NAS Find test receiver">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

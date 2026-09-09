@@ -1,10 +1,12 @@
 # NAS Find
 
-**在 Windows 和 Mac 上，快速找到 NAS 里的文件。**
+**在 Windows、Mac 和 Android 手机上，快速找到 NAS 里的文件。**
 
-面向 Linux / NAS 的文件名搜索工具，提供网页界面和 Windows / macOS 桌面客户端。
+面向 Linux / NAS 的文件名搜索工具，提供网页界面、Windows / macOS 桌面客户端和 Android 客户端。
 
 索引在 NAS 本机统一维护，多个设备共用，客户端无需各自扫描共享目录建立索引。搜索结果按需传输，桌面客户端通过 SMB 共享（Windows UNC / 映射盘，macOS Finder 挂载目录），用系统默认应用打开原文件。
+
+Android 客户端支持搜索、筛选、预览、保存文件和导出路径清单。用其他应用打开时先下载临时副本，修改不会写回 NAS。目前提供源码构建和 Actions 调试包，安装见[开发文档](docs/development.md#android-构建与安装)，操作见[使用说明](docs/usage.md#android-客户端)。
 
 ## 定位与取舍
 

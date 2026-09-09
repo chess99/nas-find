@@ -22,6 +22,8 @@ Linux 本地目录 → inotify 变化通知 → plocate 索引
 | `nasfind/static/` | 网页入口及两端共用的列表、选择逻辑和样式 |
 | `desktop/src/` | 桌面页面与 Tauri 适配层 |
 | `desktop/src-tauri/src/` | 连接、平台路径、系统操作和批量导出 |
+| `android/app/src/main/` | Android 原生界面、会话存储、查询、预览和文件操作 |
+| `android/app/src/test/`、`android/app/src/androidTest/` | Android 协议/模型测试、设备界面测试与显式真实服务检查 |
 | `desktop/sync.mjs` | 构建前同步共用前端文件 |
 | `tests/`、`desktop/tests/` | 服务端集成测试和前端逻辑测试 |
 
@@ -105,6 +107,54 @@ npm test
 `build.ps1` 可使用已安装的 Microsoft 工具链，也支持被忽略的 `.local/msvc` 私有工具目录；私有目录不是仓库的一部分。构建产物在 `desktop/src-tauri/target/release/`，NSIS 安装包在其中的 `bundle/nsis/`。
 
 构建后可运行 `install.ps1` 按当前用户安装；可用 `-InstallDirectory` 指定自己的目录。更新正在运行的客户端前先退出旧实例。安装脚本的 `-ImportExistingConnection` 仅用于显式导入已有本地凭据文件，不是新用户必须执行的步骤。
+
+## Android 构建与安装
+
+准备 JDK 17、Android SDK Platform 34 和 Build Tools 34.0.0。Android 工程独立位于 `android/`，使用 Kotlin、Jetpack Compose 和 Gradle Wrapper；可直接在 Android Studio 打开该目录。最低支持 Android 8.0（API 26）。
+
+将 `JAVA_HOME` 指向自己的 JDK，将 `ANDROID_HOME` 指向自己的 SDK；也可在被忽略的 `android/local.properties` 中设置 `sdk.dir`。不要把机器路径或签名密码写入提交的文件。
+
+Windows 从仓库根目录执行：
+
+```powershell
+cd android
+.\gradlew.bat testDebugUnitTest lintDebug assembleDebug assembleDebugAndroidTest
+adb devices -l
+# 替换为明确选择的真机或模拟器序列号。
+adb -s <设备序列号> install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+Linux / macOS 使用 `./gradlew`。调试 APK 在 `android/app/build/outputs/apk/debug/app-debug.apk`，包名 `net.chess99.nasfind.debug`，可与将来的正式包并存。部分厂商手机会要求在手机上确认 USB 安装；拒绝时不能当作安装成功，也不应关闭安装安全检查来绕过。
+
+执行合成数据设备测试：
+
+```powershell
+cd android
+$env:ANDROID_SERIAL = '<设备序列号>'
+.\gradlew.bat connectedDebugAndroidTest
+```
+
+设备测试会使用测试 NAS 配置，改变调试包的本地会话、历史和临时文件。请使用测试设备或可重置的调试安装；它不修改 NAS 服务。默认真实 NAS 用例因没有显式提供连接文件而跳过。报告在 `android/app/build/reports/`。如需保留安装，可先安装两个 APK，再直接运行：
+
+```powershell
+adb -s <设备序列号> install -r android/app/build/outputs/apk/debug/app-debug.apk
+adb -s <设备序列号> install -r android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+adb -s <设备序列号> shell am instrument -w -r -e class net.chess99.nasfind.ClientFlowTest net.chess99.nasfind.debug.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+上面直接安装命令从仓库根目录执行。用例通过手机上的合成 HTTP 服务验证查询竞态、分页、多选、文本/图片/PDF、音频播放、旋转恢复、登录过期、加密会话、CSV 准备和系统保存/取消；测试 APK 内的独立接收应用还会验证 FileProvider 读取授权。测试数据和接收应用不进入客户端 APK。测试完成后可用 `adb -s <设备序列号> uninstall net.chess99.nasfind.debug.test` 移除测试包。
+
+已有 NAS 的只读检查需显式提供被忽略的 JSON 文件，包含 `url` 和 `password`。先安装调试 APK 及测试 APK，再从仓库根目录运行：
+
+```powershell
+python scripts/android-smoke.py --serial <设备序列号> --access .local/<连接文件>.json
+```
+
+脚本通过 adb 标准输入把连接信息送入调试包私有目录，检查后删除输入文件，不把密码放进构建参数或输出。检查登录、索引、PDF 查询与适用的分页/选择后，会将会话加密保存在该调试客户端并打开应用。检查不刷新索引、不下载真实文件，也不更改 NAS 配置。
+
+`Android` 工作流在相关 PR/main 改动时运行单元测试、Lint、构建调试 APK 和设备测试 APK；调试包通过 Actions 的 `nas-find-android-debug` artifact 下载。CI 不自动执行真机/模拟器测试，设备测试结果须单独记录。Android 尚未接入客户端正式 Release；调试包使用调试签名，不冒充正式签名发行包。`assembleRelease` 可构建未签名包，正式分发前需单独配置安全的签名流程。
+
+Android 的登录会话由 Android Keystore 的 AES-GCM 密钥加密，且与服务地址绑定；密码不落盘，关闭云备份和设备迁移。应用只通过配置的服务根地址请求，认证 HTTP 客户端不跟随重定向、不使用系统代理。外部打开通过 FileProvider 仅暴露 `cache/outgoing/` 中的临时副本；保存通过系统文档选择器，不申请广泛文件访问权限。
 
 ## macOS 构建
 
