@@ -1,5 +1,37 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NAS Find</title><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="shared/explorer.css"><script type="module" src="app.js"></script></head><body>
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NAS Find</title><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="shared/explorer.css"><script type="module" src="app.js"></script></head>
+<body>
 <header><div class="brand"><span class="logo">N</span><strong>NAS Find</strong><span class="tag">文件搜索</span></div><div class="top-actions"><span id="connection">未连接</span><button id="settings">连接设置</button></div></header>
-<main><section id="explorer"></section></main><footer><span class="dot" id="dot"></span><span id="index-status">等待连接</span><span class="spacer"></span><span id="path-mode"></span><button id="refresh-index">更新索引</button></footer>
-<dialog id="settings-dialog"><form id="settings-form"><div class="dialog-title"><h2>连接你的 NAS</h2><button type="button" id="close-settings" aria-label="关闭设置">×</button></div><label>搜索服务地址<input id="server" required></label><label>访问密码<input id="password" type="password" autocomplete="current-password" placeholder="输入 NAS Find 访问密码"></label><label class="check"><input id="remember" type="checkbox" checked>记住登录，保存在当前用户的安全凭据存储中</label><div class="divider"></div><label>Samba 共享根路径<input id="share" required></label><label id="mount-setting" hidden>本机 SMB 挂载路径<input id="mount-path" placeholder="/Volumes/files"></label><div class="mapping"><label>映射盘<input id="drive" placeholder="Z:"></label><label class="check"><input id="prefer-drive" type="checkbox" checked>优先使用映射盘</label></div><p class="help">映射不匹配或不可用时使用共享路径。打开文件沿用 Windows 的共享登录权限。</p><p id="settings-error" class="error" role="alert"></p><div class="dialog-actions"><button type="button" id="disconnect">退出并忘记密码</button><span class="spacer"></span><button id="connect" class="primary" type="submit">保存并连接</button></div></form></dialog>
-<div id="toast" role="status" class="toast hidden"></div></body></html>
+<main><section id="explorer"></section></main>
+<footer><span class="dot" id="dot"></span><span id="index-status">等待连接</span><span class="spacer"></span><span id="path-mode"></span><button id="refresh-index">更新索引</button></footer>
+<dialog id="settings-dialog">
+  <form id="settings-form">
+    <div class="dialog-title"><h2>连接设置</h2><button type="button" id="close-settings" aria-label="关闭设置">×</button></div>
+    <label>搜索服务地址<input id="server" required></label>
+    <label>访问密码<input id="password" type="password" autocomplete="current-password" placeholder="输入 NAS Find 访问密码"></label>
+    <p class="credential-note">登录信息自动保存在系统安全存储中，退出登录时可清除。</p>
+    <button type="button" id="share-connection" class="share-entry" disabled hidden>
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3 3h6v6H3zm12 0h6v6h-6zM3 15h6v6H3zM13 13h4v4h4v4h-8zm8 0v2M5 5h2v2H5zm12 0h2v2h-2zM5 17h2v2H5z"/></svg>
+      <span><strong>分享连接配置</strong><small id="share-hint">在手机上扫码导入，无需手动填写</small></span><span class="share-arrow" aria-hidden="true">›</span>
+    </button>
+    <div class="divider"></div>
+    <p class="section-label">电脑文件访问</p>
+    <label>Samba 共享根路径<input id="share" required></label>
+    <label id="mount-setting" hidden>本机 SMB 挂载路径<input id="mount-path" placeholder="/Volumes/files"></label>
+    <div class="mapping"><label>映射盘<input id="drive" placeholder="Z:"></label><label class="check"><input type="checkbox" id="prefer-drive" checked>优先使用映射盘</label></div>
+    <p class="help platform-help">映射不匹配或不可用时使用共享路径。打开文件沿用 Windows 的共享登录权限。</p>
+    <p id="settings-error" class="error" role="alert"></p>
+    <div class="dialog-actions"><button type="button" id="disconnect">退出并忘记登录</button><span class="spacer"></span><button id="connect" class="primary" type="submit">保存并连接</button></div>
+  </form>
+</dialog>
+<dialog id="connection-qr-dialog" aria-labelledby="connection-qr-title">
+  <div class="dialog-title"><h2 id="connection-qr-title">连接配置二维码</h2><button id="close-connection-qr" type="button" aria-label="关闭二维码">×</button></div>
+  <p class="qr-instruction">用手机 NAS Find 的“扫码导入”打开</p>
+  <div class="qr-frame"><canvas id="connection-qr" hidden aria-label="包含 NAS 连接配置的二维码"></canvas><p id="qr-loading" role="status">正在生成…</p></div>
+  <p id="qr-server" class="qr-server"></p>
+  <p id="qr-error" class="error" role="alert"></p>
+  <p class="qr-privacy">二维码包含访问密码，请勿公开分享。</p>
+</dialog>
+<div id="toast" role="status" class="toast hidden"></div>
+</body></html>

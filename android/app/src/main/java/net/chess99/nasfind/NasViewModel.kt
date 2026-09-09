@@ -43,6 +43,7 @@ class NasViewModel(application: Application) : AndroidViewModel(application) {
     var needsLogin by mutableStateOf(true); private set
     var connecting by mutableStateOf(false); private set
     var connectionError by mutableStateOf<String?>(null); private set
+    var importedConnection by mutableStateOf<SharedConnection?>(null); private set
     var online by mutableStateOf(false); private set
     var status by mutableStateOf(IndexStatus()); private set
     var settings by mutableStateOf(false)
@@ -103,10 +104,9 @@ class NasViewModel(application: Application) : AndroidViewModel(application) {
                 candidate.login(password)
                 val newStatus = candidate.status()
                 val changed = server != candidate.server
-                store.forget(); store.server = candidate.server; store.name = displayName.trim().ifEmpty { "我的 NAS" }
-                store.saveToken(candidate.session)
+                store.saveConnection(candidate.server, displayName.trim().ifEmpty { "我的 NAS" }, candidate.session)
                 api = candidate; server = store.server; name = store.name
-                status = newStatus; online = true; needsLogin = false; settings = false
+                status = newStatus; online = true; needsLogin = false; settings = false; importedConnection = null
                 history = store.history(); backStack.clear(); exitSelection()
                 if (changed) { query = ""; filters = Filters(); browsing = false; search = SearchState() }
                 if (browsing && canSearch) startSearch()
@@ -115,13 +115,23 @@ class NasViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun stageConnectionImport(config: SharedConnection) {
+        if (busy || connecting) { notice = "请先完成当前操作，再导入连接配置"; return }
+        connectionError = null; importedConnection = config
+    }
+    fun dismissConnectionImport() { if (!connecting) { importedConnection = null; connectionError = null } }
+    fun connectImported() {
+        importedConnection?.let { connect(it.server, it.password, if (it.server == server) name else "我的 NAS") }
+    }
+
     suspend fun refreshStatus() {
         val source = api ?: return
         try {
             val result = source.status()
             if (source !== api) return
             val recovered = !online
-            status = result; online = true; connectionError = null
+            status = result; online = true
+            if (importedConnection == null && !connecting) connectionError = null
             if (recovered && browsing && search.id.isEmpty() && canSearch) startSearch()
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) { if (source === api) handleError(e) }

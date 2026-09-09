@@ -34,13 +34,19 @@ class ConnectionStore(context: Context) {
         cipher.updateAAD(server.toByteArray(Charsets.UTF_8))
         String(cipher.doFinal(Base64.decode(parts[1], Base64.NO_WRAP)), Charsets.UTF_8)
     }.getOrDefault("")
-    fun saveToken(token: String) {
+    private fun encryptedToken(token: String, address: String): String {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, key())
-        cipher.updateAAD(server.toByteArray(Charsets.UTF_8))
+        cipher.updateAAD(address.toByteArray(Charsets.UTF_8))
         val encoded = Base64.encodeToString(cipher.iv, Base64.NO_WRAP) + ":" +
             Base64.encodeToString(cipher.doFinal(token.toByteArray(Charsets.UTF_8)), Base64.NO_WRAP)
-        check(prefs.edit().putString("session", encoded).commit()) { "无法保存登录会话" }
+        return encoded
+    }
+    fun saveToken(token: String) { check(prefs.edit().putString("session", encryptedToken(token, server)).commit()) { "无法保存登录会话" } }
+    fun saveConnection(address: String, displayName: String, token: String) {
+        // Prepare encryption before touching the current connection; publish all three fields together.
+        val encoded = encryptedToken(token, address)
+        check(prefs.edit().putString("server", address).putString("name", displayName).putString("session", encoded).commit()) { "无法保存登录信息" }
     }
     fun forget() { prefs.edit().remove("session").apply() }
     private fun historyKey() = "history:" + server

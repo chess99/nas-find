@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod bulk;
 mod config;
+mod connection_share;
 #[cfg(windows)]
 mod native;
 #[cfg(target_os = "macos")]
@@ -113,7 +114,6 @@ fn bootstrap(state: State<AppState>) -> Value {
 async fn connect(
     config: Config,
     password: String,
-    remember: bool,
     state: State<'_, AppState>,
 ) -> Result<Value, String> {
     let config = config.validated()?;
@@ -136,11 +136,7 @@ async fn connect(
         .await
         .map_err(|_| "无法读取索引状态")?;
     let status = decode(result).await?;
-    let encrypted = if remember {
-        Some(native::protect(password.as_bytes(), false)?)
-    } else {
-        None
-    };
+    let encrypted = Some(native::protect(password.as_bytes(), false)?);
     state.save(&Stored {
         config: config.clone(),
         password: encrypted,
@@ -150,6 +146,16 @@ async fn connect(
     }
     *state.session.lock().unwrap() = Some(session);
     Ok(json!({"status":status,"config":config,"mapping":native::mapping(&config.drive)}))
+}
+
+#[tauri::command]
+fn share_connection(state: State<'_, AppState>) -> Result<Value, String> {
+    let session = state.session()?;
+    let stored = state.stored.lock().unwrap();
+    if stored.config.server != session.config.server {
+        return Err("请先保存并连接当前 NAS".into());
+    }
+    connection_share::payload(&stored.config, stored.password.as_deref())
 }
 
 #[tauri::command]
@@ -396,6 +402,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             bootstrap,
             connect,
+            share_connection,
             status,
             search,
             refresh_index,

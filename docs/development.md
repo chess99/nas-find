@@ -22,6 +22,7 @@ Linux 本地目录 → inotify 变化通知 → plocate 索引
 | `nasfind/static/` | 网页入口及两端共用的列表、选择逻辑和样式 |
 | `desktop/src/` | 桌面页面与 Tauri 适配层 |
 | `desktop/src-tauri/src/` | 连接、平台路径、系统操作和批量导出 |
+| `desktop/src/connection-share.js`、`desktop/src-tauri/src/connection_share.rs` | 已保存连接的二维码生成与安全凭据读取 |
 | `android/app/src/main/` | Android 原生界面、会话存储、查询、预览和文件操作 |
 | `android/app/src/test/`、`android/app/src/androidTest/` | Android 协议/模型测试、设备界面测试与显式真实服务检查 |
 | `desktop/sync.mjs` | 构建前同步共用前端文件 |
@@ -155,6 +156,18 @@ python scripts/android-smoke.py --serial <设备序列号> --access .local/<连�
 `Android` 工作流在相关 PR/main 改动时运行单元测试、Lint、构建调试 APK 和设备测试 APK；调试包通过 Actions 的 `nas-find-android-debug` artifact 下载。CI 不自动执行真机/模拟器测试，设备测试结果须单独记录。Android 尚未接入客户端正式 Release；调试包使用调试签名，不冒充正式签名发行包。`assembleRelease` 可构建未签名包，正式分发前需单独配置安全的签名流程。
 
 Android 的登录会话由 Android Keystore 的 AES-GCM 密钥加密，且与服务地址绑定；密码不落盘，关闭云备份和设备迁移。应用只通过配置的服务根地址请求，认证 HTTP 客户端不跟随重定向、不使用系统代理。外部打开通过 FileProvider 仅暴露 `cache/outgoing/` 中的临时副本；保存通过系统文档选择器，不申请广泛文件访问权限。
+
+### 连接二维码互通
+
+二维码是配置传递，不需要修改 NAS 服务。格式固定为 `nasfind://connection/v1?data=<base64url>`，内容是 UTF-8 JSON，仅含 `server`、`password`。原始 JSON 上限 1500 字节，Android 同时限制二维码文本长度为 2048 字符。Base64url 只是编码，不是加密；解析失败不能将原始二维码或密码放进错误提示、日志或历史。
+
+桌面端只在用户打开分享弹窗时读取已有安全凭据，前端本地生成二维码；关闭时清空画布和显示地址。不存在凭据时不提供补输分支。Android 对版本、字段类型及服务根地址进行校验，先在内存保留候选配置，用户确认并成功登录后再保存。服务地址、显示名和加密会话在同一次设置写入中发布，避免导入流程预先清除旧连接。
+
+桌面使用 MIT 许可的 `qrcode-generator` 1.4.4，源码及许可在 `desktop/src/vendor/`；Android 使用 ZXing Android Embedded 4.3.0 和 ZXing Core 3.5.3（Apache-2.0），仅本地识别。当前只嵌入相机预览组件，没有新增外部深链接入口，也没有把二维码内容作为 Intent 参数传给其他应用。
+
+`node desktop/tests/generate-share-fixture.mjs` 用桌面的实际编码器和生码库生成 Android 设备测试所用的合成 JSON/GIF 样例；样例只打入测试 APK。桌面 `npm test` 检查编码一致性和分享条件，Android 单元测试检查输入边界，`ConnectionImportTest` 覆盖图片互通、系统选图结果、导入确认/取消/失败、独立登录及相机生命周期。常规设备回归仍包含原有 `ClientFlowTest`。
+
+比较包大小时必须使用同配置的干净构建；Android 的增量 APK 打包可能保留空洞，不能直接把多轮增量构建的文件差值当作依赖成本。Windows 安装包和 Android 调试 APK 分别比较，不将调试包大小等同于未来经过裁剪的正式发行包。
 
 ## macOS 构建
 

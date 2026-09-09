@@ -1,0 +1,5 @@
+{
+  "server": "http://nas.example.internal:8765",
+  "password": "synthetic-中文-\"#&+/%-password",
+  "uri": "nasfind://connection/v1?data=eyJzZXJ2ZXIiOiJodHRwOi8vbmFzLmV4YW1wbGUuaW50ZXJuYWw6ODc2NSIsInBhc3N3b3JkIjoic3ludGhldGljLeS4reaWhy1cIiMmKy8lLXBhc3N3b3JkIn0"
+}

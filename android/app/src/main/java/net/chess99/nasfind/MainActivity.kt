@@ -107,6 +107,7 @@ class MainActivity : ComponentActivity() {
     var fileMenu by remember { mutableStateOf<Entry?>(null) }
     var filtersOpen by rememberSaveable { mutableStateOf(false) }
     var exportOpen by rememberSaveable { mutableStateOf(false) }
+    var importOpen by rememberSaveable { mutableStateOf(false) }
     val saveLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         vm.savePrepared(if (it.resultCode == android.app.Activity.RESULT_OK) it.data?.data else null)
     }
@@ -158,7 +159,7 @@ class MainActivity : ComponentActivity() {
             while (true) { vm.refreshStatus(); delay(30_000) }
         }
     }
-    BackHandler(enabled = !filtersOpen && fileMenu == null && !exportOpen && (vm.preview != null || vm.settings || vm.selectionMode || vm.browsing)) {
+    BackHandler(enabled = !importOpen && vm.importedConnection == null && !filtersOpen && fileMenu == null && !exportOpen && (vm.preview != null || vm.settings || vm.selectionMode || vm.browsing)) {
         when { vm.preview != null -> vm.closePreview(); vm.settings -> vm.settings = false; vm.selectionMode -> vm.exitSelection(); else -> vm.backSearch() }
     }
     Scaffold(snackbarHost = { SnackbarHost(snackbar) }, bottomBar = {
@@ -188,12 +189,28 @@ class MainActivity : ComponentActivity() {
     }) { inset ->
         Box(Modifier.fillMaxSize().padding(inset).imePadding()) {
             when {
-                vm.needsLogin -> ConnectionPage(vm)
+                importOpen -> ConnectionScanner(onClose = { importOpen = false }, onRead = { vm.stageConnectionImport(it); importOpen = false })
+                vm.needsLogin -> ConnectionPage(vm, onImport = { importOpen = true })
                 vm.preview != null -> PreviewPage(vm) { fileMenu = it }
-                vm.settings -> SettingsPage(vm)
+                vm.settings -> SettingsPage(vm, onImport = { importOpen = true })
                 else -> SearchPage(vm, { filtersOpen = true }, { fileMenu = it })
             }
         }
+    }
+    vm.importedConnection?.let { imported ->
+        AlertDialog(onDismissRequest = vm::dismissConnectionImport, modifier = Modifier.testTag("import-dialog"), title = { Text("导入连接配置") },
+            text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("将连接到以下 NAS 服务：", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(imported.server, fontWeight = FontWeight.Medium, modifier = Modifier.testTag("import-server"))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Outlined.Lock, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(8.dp)); Text("访问密码已包含", fontSize = 13.sp)
+                }
+                Text(if (!vm.needsLogin && imported.server != vm.server) "连接成功后替换当前配置，失败时保留原连接。" else "连接成功后自动安全保存登录信息。", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                vm.connectionError?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("import-error")) }
+            } },
+            confirmButton = { TextButton(onClick = vm::connectImported, enabled = !vm.connecting, modifier = Modifier.testTag("confirm-import")) { Text(if (vm.connecting) "正在连接…" else "连接并保存") } },
+            dismissButton = { TextButton(onClick = vm::dismissConnectionImport, enabled = !vm.connecting, modifier = Modifier.testTag("cancel-import")) { Text("取消") } })
     }
     if (filtersOpen) FilterSheet(vm.filters, { filtersOpen = false }) { value -> vm.applyFilters(value); filtersOpen = false }
     fileMenu?.let { entry ->
@@ -230,7 +247,7 @@ class MainActivity : ComponentActivity() {
         dismissButton = { TextButton(onClick = { exportOpen = false; vm.exportSelection(false) }) { Text("TXT 清单") } })
 }
 
-@Composable private fun ConnectionPage(vm: NasViewModel) {
+@Composable private fun ConnectionPage(vm: NasViewModel, onImport: () -> Unit) {
     var address by rememberSaveable(vm.server) { mutableStateOf(vm.server) }
     var name by rememberSaveable(vm.name) { mutableStateOf(vm.name) }
     // Deliberately not saveable: passwords must not enter saved-instance-state or disk.
@@ -239,9 +256,24 @@ class MainActivity : ComponentActivity() {
     val focus = LocalFocusManager.current
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Text("NAS Find", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(8.dp))
         Text("连接你的 NAS", fontSize = 28.sp, fontWeight = FontWeight.SemiBold)
         Text("连接已有的 NAS Find 搜索服务", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        OutlinedCard(onClick = onImport, enabled = !vm.connecting, modifier = Modifier.fillMaxWidth().testTag("scan-import"),
+            colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+            Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Outlined.QrCodeScanner, null, Modifier.size(28.dp), tint = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.width(14.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("扫码导入", fontWeight = FontWeight.SemiBold)
+                    Text("从电脑分享的连接二维码导入", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Icon(Icons.Outlined.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            HorizontalDivider(Modifier.weight(1f)); Text("或手动填写", Modifier.padding(horizontal = 12.dp), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant); HorizontalDivider(Modifier.weight(1f))
+        }
         OutlinedTextField(address, { address = it }, Modifier.fillMaxWidth().testTag("server-field"), label = { Text("服务地址") },
             placeholder = { Text("http://nas.example.internal:8765") }, singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next))
@@ -558,7 +590,7 @@ class MainActivity : ComponentActivity() {
     }, modifier = Modifier.fillMaxWidth().heightIn(min = 200.dp))
 }
 
-@Composable private fun SettingsPage(vm: NasViewModel) {
+@Composable private fun SettingsPage(vm: NasViewModel, onImport: () -> Unit) {
     var changing by remember { mutableStateOf(false) }
     var confirm by remember { mutableStateOf<String?>(null) }
     var license by remember { mutableStateOf(false) }
@@ -568,10 +600,13 @@ class MainActivity : ComponentActivity() {
             IconButton(onClick = { if (changing) changing = false else vm.settings = false }) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "返回") }
             Text(if (changing) "更改连接" else "设置", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
         }
-        if (changing) ConnectionPage(vm) else Column(Modifier.verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        if (changing) ConnectionPage(vm, onImport) else Column(Modifier.verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("连接", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Medium)
             Text(vm.name, fontSize = 18.sp); Text(vm.server, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Row { TextButton(onClick = vm::retryConnection) { Text("测试连接") }; TextButton(onClick = { if (vm.busy) vm.notice = "请先完成或取消当前任务" else changing = true }) { Text("更改连接") } }
+            TextButton(onClick = onImport, enabled = !vm.busy && !vm.connecting, modifier = Modifier.testTag("settings-import")) {
+                Icon(Icons.Outlined.QrCodeScanner, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text("扫码导入连接配置")
+            }
             HorizontalDivider(); Text("索引", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Medium)
             Text(vm.stateLabel); Text("${vm.status.entries} 个索引条目", color = MaterialTheme.colorScheme.onSurfaceVariant)
             vm.status.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
@@ -596,7 +631,7 @@ class MainActivity : ComponentActivity() {
         dismissButton = { TextButton(onClick = { confirm = null }) { Text("取消") } }) }
     if (license) AlertDialog(onDismissRequest = { license = false }, title = { Text("开源许可") }, text = {
         Column(Modifier.heightIn(max = 440.dp).verticalScroll(rememberScrollState())) {
-            Text("NAS Find · AGPL-3.0-only\n源码：https://github.com/chess99/nas-find\n\nAndroidX、Compose、Kotlin、Kotlin Coroutines、OkHttp、Okio：Apache-2.0。\n\n")
+            Text("NAS Find · AGPL-3.0-only\n源码：https://github.com/chess99/nas-find\n\nAndroidX、Compose、Kotlin、Kotlin Coroutines、OkHttp、Okio、ZXing、ZXing Android Embedded：Apache-2.0。\n\n")
             val text = remember { context.assets.open("LICENSE").bufferedReader().use { it.readText() } + "\n\n" +
                 context.assets.open("APACHE-2.0.txt").bufferedReader().use { it.readText() } }
             SelectionContainer { Text(text, fontSize = 12.sp) }
