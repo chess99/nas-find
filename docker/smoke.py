@@ -95,6 +95,8 @@ def main(image):
             time.sleep(3)
             assert api("/api/status")["successful_updates"] == before
             docker("restart", "--time", "45", name)
+            # Docker may assign a different ephemeral host port after restart.
+            url = "http://" + docker("port", name, "8765/tcp").splitlines()[0]
             eventually(lambda: request("/").close() or True)
             assert (config / "password").read_text().strip() == password
             login()
