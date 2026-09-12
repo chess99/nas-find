@@ -14,6 +14,7 @@ Linux 本地目录 → inotify 变化通知 → plocate 索引
 
 | 目录 / 文件 | 职责 |
 |---|---|
+| `version.json`、`scripts/version.mjs` | 统一产品版本、Android 升级序号与各平台字段同步 |
 | `nasfind/config.py` | 服务配置、索引范围和文件访问边界 |
 | `nasfind/watcher.py` | inotify 监听、目录变化与恢复 |
 | `nasfind/engine.py` | 索引调度、发布和旧快照保护 |
@@ -59,37 +60,76 @@ docker compose --env-file examples/docker.env config --quiet
 
 集成测试使用真实 plocate / inotify。容器验收脚本使用临时合成数据，覆盖登录、搜索、排除项、非 root 进程、只读源目录、创建/改名/删除通知、空闲不更新、重启后的密码与索引保留、健康检查和优雅停止。脚本要求原生 Linux Docker 主机，以测试本地目录的 inotify 事件。
 
-GitHub 的 `Docker` 工作流在相关 PR/main 改动时构建并验证 AMD64 镜像；发布 `v*` 标签或手动运行工作流时，在测试通过后构建并推送 AMD64 / ARM64 镜像到 GHCR。手动 main 发布及不含 `-` 的稳定版本标签更新 `latest`；预发布标签与其他分支的手动构建只生成版本/提交标签。建议用户部署固定版本，维护者应按版本顺序发布稳定标签，避免旧标签覆盖 latest。
+GitHub 的 `Docker` 工作流在相关 PR/main 改动或手动运行时构建并验证 AMD64 镜像。正式镜像由统一 `Release` 工作流调用发布，规则见下方；建议部署固定版本。
 
-## 客户端 Release
+## 统一版本与 Release
 
-`Client Release` 工作流构建两个安装包：
-
-| 系统 | 构建目标 | 安装包 |
-|---|---|---|
-| Windows 64 位（Intel / AMD） | `x86_64-pc-windows-msvc` | `NAS-Find_<版本>_windows-x64-setup.exe` |
-| macOS（Apple M 系列） | `aarch64-apple-darwin` | `NAS-Find_<版本>_macos-arm64.dmg` |
-
-在 GitHub 的 Actions 页选择 `Client Release`，点击 Run workflow 并选择分支，可构建测试包。完成后从该次运行的 Artifacts 下载 `client-windows-x64` 或 `client-macos-arm64`。
-
-正式发布时，将 `desktop/package.json`、`desktop/package-lock.json`、`desktop/src-tauri/tauri.conf.json`、`desktop/src-tauri/Cargo.toml` 和 `desktop/src-tauri/Cargo.lock` 中的客户端版本更新为同一个版本。锁文件只更新本项目包的版本；依赖升级单独进行。检查版本并运行发布脚本测试：
+从 0.5.0 起，服务端、网页、Windows、macOS 和 Android 共用产品版本。根目录 `version.json` 是唯一权威入口，包含 `version` 和独立递增的 `androidVersionCode`。平台要求的版本字段仍提交到仓库，通过脚本同步并由 CI 校验，不逐个手工修改。
 
 ```sh
-node scripts/release.mjs validate
+# 下一次功能发布的预发布版本；同时增加 Android 升级序号。
+node scripts/version.mjs bump 0.6.0-rc.1
+# 确认测试完成后转正式版，Android 序号再次增加。
+node scripts/version.mjs bump 0.6.0
+# 修复镜像字段不同步，不改变产品版本或 Android 序号。
+node scripts/version.mjs sync
+node scripts/version.mjs check
 node --test scripts/release.test.mjs
 ```
 
-提交版本改动后，创建并推送对应的 `v<版本号>` 标签。例如客户端版本为 `0.4.2` 时：
+版本支持 `major.minor.patch` 和 `major.minor.patch-rc.N`。新增功能增加次版本，兼容修复增加修订号；破坏兼容的变更需明确说明迁移要求。`bump` 拒绝降级或重复版本，RC 转正式版的 Android 序号也递增。标签发布会进一步检查历史标签，版本与 Android 序号必须高于旧发布。
+
+产品版本与接口协议分开维护：`/api/status` 返回 `version`、`api_version`、`min_client_api_version` 和 `capabilities`。协议常量位于 `nasfind/protocol.py`，新增兼容功能通过能力标记声明，不随产品版本自动升级协议。客户端允许兼容的不同产品版本；旧服务未提供协议字段时按现有协议 1 处理。服务器要求更高客户端协议时提示更新客户端。网页随服务端一起交付，Android 和桌面设置中可查看服务器版本；命令行可执行 `python -m nasfind --version`。
+
+`Release` 工作流仍位于 `.github/workflows/client-release.yml`，统一构建以下产物：
+
+| 系统 | 产物 |
+|---|---|
+| Windows 64 位（Intel / AMD） | `NAS-Find_<版本>_windows-x64-setup.exe` |
+| macOS（Apple M 系列） | `NAS-Find_<版本>_macos-arm64.dmg` |
+| Android 8.0 及以上 | `NAS-Find_<版本>_android.apk`，固定签名的通用 APK |
+| Linux / NAS | `ghcr.io/<owner>/<repository>:v<版本>`，AMD64 / ARM64 镜像 |
+
+在 Actions 中手动运行 **Release** 会构建和验证桌面安装包、正式签名 APK 及多架构镜像，安装包位于 `client-*` Artifacts；手动分支构建不公开 GitHub Release，也不推送 Docker 镜像。日常 Android 工作流继续产出 `.debug` 调试包，普通 Docker 工作流只检查代码和容器。
+
+正式发版时，完成版本更新、测试与提交，再推送对应标签，例如统一版本已经是 `0.5.0` 时：
 
 ```sh
-git tag -a v0.4.2 -m "NAS Find 0.4.2"
 git push origin main
-git push origin v0.4.2
+git tag -a v0.5.0 -m "NAS Find 0.5.0"
+git push origin v0.5.0
 ```
 
-标签会同时触发客户端 Release 和 Docker 镜像工作流。客户端工作流检查标签与版本文件一致，运行前端与原生测试，再构建安装包。两个平台均成功后，将安装包、`LICENSE` 和 `SHA256SUMS.txt` 上传至 Release，生成下载表格与更新说明，然后发布。
+标签发布先检查版本一致性、历史版本及签名配置。桌面与 Android 构建成功后，由同一总流程调用 Docker 检查和镜像发布；全部成功后汇总三个安装包、`LICENSE`、`SHA256SUMS.txt` 和下载表，公开 GitHub Release。稳定标签更新镜像 `latest`；RC 只发布对应版本镜像并标记 GitHub Prerelease。
 
-带 `-` 的版本（例如 `0.4.3-rc.1`）发布为 Prerelease；稳定版本设为 Latest。发布失败留下的草稿可通过重新运行工作流继续上传；已经公开的版本保持不变，修改安装包时使用新版本号。工作流使用仓库自带的 `GITHUB_TOKEN`，只在上传 Release 的任务中申请写权限。
+任一检查失败均不会公开 GitHub Release。已公开版本在构建前拒绝重发；失败留下的草稿可重跑。GitHub Release 和镜像仓库是独立服务：若镜像已推送、后续 Release 上传失败，修复后重跑同一未公开版本完成发布，不宣称跨服务原子发布。
+
+### Android 正式签名
+
+发布包名为 `net.chess99.nasfind`；调试包为 `net.chess99.nasfind.debug`，两者可并存，首次使用正式包需导入连接。后续正式包使用相同证书和更大的 `versionCode` 覆盖升级。
+
+仓库需要以下 GitHub Actions Secrets：
+
+| Secret | 内容 |
+|---|---|
+| `ANDROID_KEYSTORE_BASE64` | 固定发布 keystore 的 Base64 内容 |
+| `ANDROID_KEYSTORE_PASSWORD` | keystore 密码 |
+| `ANDROID_KEY_ALIAS` | 发布密钥别名 |
+| `ANDROID_KEY_PASSWORD` | 发布密钥密码 |
+
+密钥及恢复信息保存在维护者的私有资料库，不进入公开源码仓库。公开的 `android/signing-certificate.sha256` 固定签名证书 SHA-256。构建时临时恢复 keystore，结束后清理；缺少签名配置时正式构建失败，不回退为调试或未签名 APK。
+
+本地构建从私有签名资料注入 `ANDROID_KEYSTORE_FILE`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD` 环境变量，再执行：
+
+```sh
+cd android
+./gradlew assembleRelease
+cd ..
+python scripts/android_release.py --apk android/app/build/outputs/apk/release/app-release.apk
+node scripts/release.mjs stage android
+```
+
+Windows 使用 `gradlew.bat`。验证工具要求 Android SDK Build Tools 34.0.0，通过真实 `apksigner` 验证签名完整性，并校验签名指纹、正式包名、产品版本、升级序号和不可调试属性。恢复 Secrets 应复用现有密钥，不重新生成；更换签名会影响已安装应用的覆盖升级。
 
 ## Windows 构建
 
@@ -153,7 +193,7 @@ python scripts/android-smoke.py --serial <设备序列号> --access .local/<连�
 
 脚本通过 adb 标准输入把连接信息送入调试包私有目录，检查后删除输入文件，不把密码放进构建参数或输出。检查登录、索引、PDF 查询与适用的分页/选择后，会将会话加密保存在该调试客户端并打开应用。检查不刷新索引、不下载真实文件，也不更改 NAS 配置。
 
-`Android` 工作流在相关 PR/main 改动时运行单元测试、Lint、构建调试 APK 和设备测试 APK；调试包通过 Actions 的 `nas-find-android-debug` artifact 下载。CI 不自动执行真机/模拟器测试，设备测试结果须单独记录。Android 尚未接入客户端正式 Release；调试包使用调试签名，不冒充正式签名发行包。`assembleRelease` 可构建未签名包，正式分发前需单独配置安全的签名流程。
+`Android` 工作流在相关 PR/main 改动时运行单元测试、Lint、构建调试 APK 和设备测试 APK；调试包通过 Actions 的 `nas-find-android-debug` artifact 下载。CI 不自动执行真机/模拟器测试，设备测试结果须单独记录。调试包使用调试签名。正式 APK 由统一 `Release` 工作流构建、签名和发布，配置见上方“Android 正式签名”；未配置签名时 `assembleRelease` 会明确失败。
 
 Android 的登录会话由 Android Keystore 的 AES-GCM 密钥加密，且与服务地址绑定；密码不落盘，关闭云备份和设备迁移。应用只通过配置的服务根地址请求，认证 HTTP 客户端不跟随重定向、不使用系统代理。外部打开通过 FileProvider 仅暴露 `cache/outgoing/` 中的临时副本；保存通过系统文档选择器，不申请广泛文件访问权限。
 

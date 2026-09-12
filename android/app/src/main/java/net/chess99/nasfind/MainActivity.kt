@@ -505,6 +505,7 @@ class MainActivity : ComponentActivity() {
         if (changing) ConnectionPage(vm, onImport) else Column(Modifier.verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("连接", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Medium)
             Text(vm.name, fontSize = 18.sp); Text(vm.server, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("服务器版本：${vm.status.serverVersion ?: "未提供"}", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Row { TextButton(onClick = vm::retryConnection) { Text("测试连接") }; TextButton(onClick = { if (vm.busy) vm.notice = "请先完成或取消当前任务" else changing = true }) { Text("更改连接") } }
             TextButton(onClick = onImport, enabled = !vm.busy && !vm.connecting, modifier = Modifier.testTag("settings-import")) {
                 Icon(Icons.Outlined.QrCodeScanner, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text("扫码导入连接配置")

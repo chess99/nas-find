@@ -4,6 +4,11 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val signingVariables = listOf("ANDROID_KEYSTORE_FILE", "ANDROID_KEYSTORE_PASSWORD", "ANDROID_KEY_ALIAS", "ANDROID_KEY_PASSWORD")
+val signingValues = signingVariables.associateWith { System.getenv(it).orEmpty() }
+val hasReleaseSigning = signingValues.values.all { it.isNotEmpty() }
+require(hasReleaseSigning || signingValues.values.all { it.isEmpty() }) { "Android 发布签名配置不完整" }
+
 android {
     namespace = "net.chess99.nasfind"
     compileSdk = 34
@@ -11,19 +16,38 @@ android {
         applicationId = "net.chess99.nasfind"
         minSdk = 26
         targetSdk = 34
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.5.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+    signingConfigs {
+        create("release") {
+            if (hasReleaseSigning) {
+                storeFile = file(signingValues.getValue("ANDROID_KEYSTORE_FILE"))
+                storePassword = signingValues.getValue("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = signingValues.getValue("ANDROID_KEY_ALIAS")
+                keyPassword = signingValues.getValue("ANDROID_KEY_PASSWORD")
+            }
+        }
     }
     buildTypes {
         debug { applicationIdSuffix = ".debug"; versionNameSuffix = "-debug" }
-        release { isMinifyEnabled = false }
+        release {
+            isMinifyEnabled = false
+            signingConfig = if (hasReleaseSigning) signingConfigs.getByName("release") else null
+        }
     }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true; buildConfig = true }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
     sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("generated/license-assets"))
+}
+
+gradle.taskGraph.whenReady {
+    if (!hasReleaseSigning && allTasks.any { it.name in setOf("assembleRelease", "bundleRelease", "packageRelease") }) {
+        error("构建正式 APK 需要固定发布签名，请配置 ANDROID_KEYSTORE_FILE、ANDROID_KEYSTORE_PASSWORD、ANDROID_KEY_ALIAS、ANDROID_KEY_PASSWORD")
+    }
 }
 
 val copyLicense by tasks.registering(Copy::class) {

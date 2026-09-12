@@ -6,7 +6,7 @@
 
 索引在 NAS 本机统一维护，多个设备共用，客户端无需各自扫描共享目录建立索引。搜索结果按需传输，桌面客户端通过 SMB 共享（Windows UNC / 映射盘，macOS Finder 挂载目录），用系统默认应用打开原文件。
 
-Android 客户端支持搜索、文件夹浏览、图片与文本查看、保存和导出路径清单。音视频可通过系统播放器按需读取；文档由系统应用打开临时副本，修改不会写回 NAS。目前提供源码构建和 Actions 调试包，安装见[开发文档](docs/development.md#android-构建与安装)，操作见[使用说明](docs/usage.md#android-客户端)。
+Android 客户端支持搜索、文件夹浏览、图片与文本查看、保存和导出路径清单。音视频可通过系统播放器按需读取；文档由系统应用打开临时副本，修改不会写回 NAS。从 0.5.0 起，正式 APK 随统一 Release 提供；发布前及日常测试可从 Actions 获取构建产物。安装见[开发文档](docs/development.md#android-构建与安装)，操作见[使用说明](docs/usage.md#android-客户端)。
 
 ## 定位与取舍
 
@@ -35,7 +35,7 @@ NAS Find 只索引名称与路径，不在后台解析正文、EXIF 或音视频
 ## 开始使用
 
 1. 按[部署文档](docs/deployment.md)在 NAS 上通过 Docker 或原生方式启动服务。
-2. 使用浏览器访问服务，或从 [Releases](https://github.com/chess99/nas-find/releases) 下载 Windows 64 位 / Mac M 系列安装包。本地构建见[开发文档](docs/development.md)。
+2. 使用浏览器访问服务，或从 [Releases](https://github.com/chess99/nas-find/releases) 下载 Windows 64 位、Mac M 系列安装包或 Android APK。本地构建见[开发文档](docs/development.md)。
 3. 在客户端填写自己的服务地址和共享路径，参阅[使用说明](docs/usage.md)。
 
 也可以把仓库交给 AI agent，要求它先读取 [AGENTS.md](AGENTS.md)，再按同一份部署文档执行。

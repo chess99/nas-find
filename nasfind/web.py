@@ -14,6 +14,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlsplit
 from .queries import Queries
+from . import __version__
+from .protocol import API_VERSION, MIN_CLIENT_API_VERSION, CAPABILITIES
 
 LOG = logging.getLogger(__name__)
 STATIC = Path(__file__).parent / "static"
@@ -148,7 +150,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(401, {"error": "请先登录"})
             engine = self.server.engine
             if url.path == "/api/status":
-                return self._json(200, {**engine.status(), "capabilities": ["directory-browse"]})
+                return self._json(200, {**engine.status(), "version": __version__, "api_version": API_VERSION,
+                                        "min_client_api_version": MIN_CLIENT_API_VERSION, "capabilities": CAPABILITIES})
             if url.path == "/api/directories":
                 return self._json(200, self.server.queries.directories(arg("scope"), arg("offset", "0")))
             if url.path == "/api/search":

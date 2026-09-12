@@ -2,10 +2,10 @@ name: Android
 
 on:
   pull_request:
-    paths: ['android/**', '.github/workflows/android.yml', 'LICENSE']
+    paths: ['android/**', '.github/workflows/android.yml', 'LICENSE', 'version.json', 'scripts/version.mjs']
   push:
     branches: [main]
-    paths: ['android/**', '.github/workflows/android.yml', 'LICENSE']
+    paths: ['android/**', '.github/workflows/android.yml', 'LICENSE', 'version.json', 'scripts/version.mjs']
   workflow_dispatch:
 
 permissions:
@@ -16,6 +16,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node scripts/version.mjs check
       - uses: actions/setup-java@v4
         with:
           distribution: temurin

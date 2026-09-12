@@ -2,12 +2,19 @@ name: Docker
 
 on:
   pull_request:
-    paths: ['nasfind/**', 'docker/**', 'tests/**', 'Dockerfile', '.dockerignore', 'compose.yaml', 'examples/docker.env', 'examples/unraid/**', '.github/workflows/docker.yml']
+    paths: ['nasfind/**', 'docker/**', 'tests/**', 'Dockerfile', '.dockerignore', 'compose.yaml', 'examples/docker.env', 'examples/unraid/**', '.github/workflows/docker.yml', 'version.json', 'scripts/version.mjs', 'scripts/release.mjs']
   push:
     branches: [main]
-    paths: ['nasfind/**', 'docker/**', 'tests/**', 'Dockerfile', '.dockerignore', 'compose.yaml', 'examples/docker.env', 'examples/unraid/**', '.github/workflows/docker.yml']
-    tags: ['v*']
+    paths: ['nasfind/**', 'docker/**', 'tests/**', 'Dockerfile', '.dockerignore', 'compose.yaml', 'examples/docker.env', 'examples/unraid/**', '.github/workflows/docker.yml', 'version.json', 'scripts/version.mjs', 'scripts/release.mjs']
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      release_build:
+        type: boolean
+        default: false
+      publish:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -17,6 +24,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node scripts/version.mjs check
       - run: docker build -t nas-find:test .
       - name: Linux unit and integration tests
         run: >-
@@ -31,18 +44,31 @@ jobs:
           docker compose --env-file examples/docker.env config --quiet
           python3 -c "import xml.etree.ElementTree as E; E.parse('examples/unraid/nas-find.xml')"
 
-  publish:
+  image:
     needs: test
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    if: inputs.release_build
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - id: version
+        run: node scripts/release.mjs validate
+      - name: Require a version tag before publishing
+        if: inputs.publish
+        env:
+          RELEASE_REF: ${{ github.ref }}
+        run: '[[ "$RELEASE_REF" == refs/tags/v* ]]'
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
+        if: inputs.publish
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -52,14 +78,18 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || (startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, '-')) }}
-            type=ref,event=tag
+            type=raw,value=latest,enable=${{ inputs.publish && !contains(github.ref, '-') }}
+            type=raw,value=v${{ steps.version.outputs.version }}
             type=sha
           flavor: latest=false
       - uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64,linux/arm64
-          push: true
+          push: ${{ inputs.publish }}
           tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          labels: |
+            ${{ steps.meta.outputs.labels }}
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+          cache-from: type=gha,scope=release-image
+          cache-to: type=gha,scope=release-image,mode=max

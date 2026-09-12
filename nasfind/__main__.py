@@ -7,10 +7,12 @@ import threading
 from .config import load
 from .engine import Engine
 from .web import Server
+from . import __version__
 
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--version", action="version", version=f"NAS Find {__version__}")
     parser.add_argument("--config", required=True)
     args = parser.parse_args()
     os.umask(0o077)

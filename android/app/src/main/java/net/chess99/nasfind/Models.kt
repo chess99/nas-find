@@ -61,7 +61,12 @@ fun Entry.mime(fallback: String): String = if (fallback != "application/octet-st
 }
 
 data class IndexStatus(val available: Boolean = false, val scanning: Boolean = false, val dirty: Boolean = false,
-    val error: String? = null, val entries: Long = 0, val directoryBrowse: Boolean = false) {
+    val error: String? = null, val entries: Long = 0, val directoryBrowse: Boolean = false,
+    val serverVersion: String? = null, val apiVersion: Int = 1, val minClientApiVersion: Int = 1) {
+    fun checkCompatibility() {
+        if (minClientApiVersion > 1) throw CompatibilityException("服务器需要新版客户端，请更新 NAS Find")
+        if (apiVersion < 1) throw CompatibilityException("服务器接口版本过旧，请更新 NAS Find 服务")
+    }
     val label get() = when {
         !available && error != null -> "索引不可用"
         !available -> "正在建立索引"
@@ -73,7 +78,8 @@ data class IndexStatus(val available: Boolean = false, val scanning: Boolean = f
     companion object {
         fun from(json: JSONObject) = IndexStatus(json.optBoolean("available"), json.optBoolean("scanning"),
             json.optBoolean("dirty"), json.nullableString("error"), json.optLong("entries"),
-            json.optJSONArray("capabilities")?.let { a -> (0 until a.length()).any { a.optString(it) == "directory-browse" } } == true)
+            json.optJSONArray("capabilities")?.let { a -> (0 until a.length()).any { a.optString(it) == "directory-browse" } } == true,
+            json.nullableString("version"), json.optInt("api_version", 1), json.optInt("min_client_api_version", 1))
     }
 }
 

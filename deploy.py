@@ -41,7 +41,7 @@ def read_config(path):
 
 
 def package(destination, root=ROOT):
-    files = [root / name for name in ("README.md", "LICENSE", "AGENTS.md", ".gitignore", "deploy.py")]
+    files = [root / name for name in ("README.md", "LICENSE", "AGENTS.md", ".gitignore", "deploy.py", "version.json")]
     for directory in ("nasfind", "scripts", "tests", "docs", "examples", "docker"):
         files.extend((root / directory).rglob("*"))
     with tarfile.open(destination, "w:gz") as archive:

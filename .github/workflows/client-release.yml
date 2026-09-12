@@ -1,4 +1,4 @@
-name: Client Release
+name: Release
 
 on:
   push:
@@ -20,12 +20,34 @@ jobs:
       prerelease: ${{ steps.version.outputs.prerelease }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
       - run: node --test scripts/release.test.mjs
       - id: version
         run: node scripts/release.mjs validate
+      - name: Reject already published versions
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          node --input-type=module -e '
+            import {execFileSync} from "node:child_process";
+            const releases = JSON.parse(execFileSync("gh", ["release", "list", "--limit", "1000", "--json", "tagName,isDraft"], {encoding:"utf8"}));
+            if (releases.some(r => r.tagName === process.env.RELEASE_TAG && !r.isDraft)) throw Error("This version is already published; use a new version.");
+          '
+      - name: Check signing configuration
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          python3 -c 'import os; names=["ANDROID_KEYSTORE_BASE64","ANDROID_KEYSTORE_PASSWORD","ANDROID_KEY_ALIAS","ANDROID_KEY_PASSWORD"]; missing=[n for n in names if not os.environ.get(n)]; assert not missing, "Missing signing Secrets: " + ", ".join(missing)'
+
 
   build:
     needs: version
@@ -76,8 +98,66 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  android:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - run: sdkmanager 'platforms;android-34' 'build-tools;34.0.0'
+      - name: Test Android
+        working-directory: android
+        run: ./gradlew testDebugUnitTest lintRelease
+      - name: Build signed APK
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          umask 077
+          export ANDROID_KEYSTORE_FILE="$RUNNER_TEMP/nas-find-release.jks"
+          trap 'rm -f "$ANDROID_KEYSTORE_FILE"' EXIT
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$ANDROID_KEYSTORE_FILE"
+          cd android
+          ./gradlew assembleRelease --no-daemon
+      - name: Verify APK identity and signature
+        run: python3 scripts/android_release.py --apk android/app/build/outputs/apk/release/app-release.apk
+      - name: Collect APK
+        run: node scripts/release.mjs stage android
+      - uses: actions/upload-artifact@v4
+        with:
+          name: client-android
+          path: dist/release/*
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-android-test-reports
+          path: android/app/build/reports/
+
+  docker:
+    needs: [version, build, android]
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/docker.yml
+    with:
+      release_build: true
+      publish: ${{ startsWith(github.ref, 'refs/tags/v') }}
+
   release:
-    needs: [version, build]
+    needs: [version, build, android, docker]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:

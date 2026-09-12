@@ -36,13 +36,14 @@ class DeploymentInputs(unittest.TestCase):
     def test_packaging_excludes_private_data_and_includes_templates_and_license(self):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder)/"source";root.mkdir()
-            for name in ("nasfind/__init__.py","scripts/deploy_remote.py","examples/server-config.json","docker/entrypoint.py","LICENSE","AGENTS.md", ".local/access.json","desktop/private.txt","nasfind/__pycache__/cached.pyc"):
+            for name in ("nasfind/__init__.py","scripts/deploy_remote.py","examples/server-config.json","docker/entrypoint.py","version.json","nasfind/_version.py","LICENSE","AGENTS.md", ".local/access.json","desktop/private.txt","nasfind/__pycache__/cached.pyc"):
                 path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text("fixture")
             package=Path(folder)/"source.tar.gz";deploy.package(package,root)
             with tarfile.open(package) as archive: names=set(archive.getnames())
             self.assertIn("LICENSE",names);self.assertIn("examples/server-config.json",names)
             self.assertIn("scripts/deploy_remote.py",names)
             self.assertIn("docker/entrypoint.py",names)
+            self.assertIn("version.json",names);self.assertIn("nasfind/_version.py",names)
             self.assertFalse(any(".local" in p or "desktop" in p or "__pycache__" in p for p in names))
 
     def test_public_url_is_explicit_for_wildcard_binds(self):

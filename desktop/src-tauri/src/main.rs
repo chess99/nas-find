@@ -66,7 +66,18 @@ async fn decode(response: reqwest::Response) -> Result<Value, String> {
     if !status.is_success() {
         return Err(value["error"].as_str().unwrap_or("请求失败").into());
     }
+    check_api_compatibility(&value)?;
     Ok(value)
+}
+
+fn check_api_compatibility(value: &Value) -> Result<(), String> {
+    if value["min_client_api_version"].as_u64().unwrap_or(1) > 1 {
+        return Err("服务器需要新版客户端，请更新 NAS Find".into());
+    }
+    if value["api_version"].as_u64().unwrap_or(1) < 1 {
+        return Err("服务器接口版本过旧，请更新 NAS Find 服务".into());
+    }
+    Ok(())
 }
 
 async fn login(config: Config, password: String) -> Result<Session, String> {
@@ -107,7 +118,7 @@ impl AppState {
 #[tauri::command]
 fn bootstrap(state: State<AppState>) -> Value {
     let stored = state.stored.lock().unwrap();
-    json!({"config":stored.config,"remembered":stored.password.is_some(),"platform":std::env::consts::OS})
+    json!({"config":stored.config,"remembered":stored.password.is_some(),"platform":std::env::consts::OS,"version":env!("CARGO_PKG_VERSION")})
 }
 
 #[tauri::command]
@@ -493,5 +504,17 @@ mod tests {
             assert!(excluded["results"].as_array().unwrap().is_empty());
             println!("NAS login, search, exclusions, mapped file and UNC file access passed.");
         });
+    }
+}
+
+#[cfg(test)]
+mod protocol_tests {
+    use super::*;
+    #[test]
+    fn product_versions_do_not_gate_compatible_protocols() {
+        assert!(check_api_compatibility(&json!({})).is_ok());
+        assert!(check_api_compatibility(&json!({"version":"9.0.0","api_version":2,"min_client_api_version":1})).is_ok());
+        assert!(check_api_compatibility(&json!({"min_client_api_version":2})).is_err());
+        assert!(check_api_compatibility(&json!({"api_version":0})).is_err());
     }
 }

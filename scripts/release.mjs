@@ -1,36 +1,32 @@
 import {appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync} from 'node:fs';
 import {createHash} from 'node:crypto';
+import {execFileSync} from 'node:child_process';
+import {validateVersions, readVersion, compareVersions} from './version.mjs';
 import {dirname, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const json = path => JSON.parse(readFileSync(path, 'utf8'));
 export const targets = {
+  android: {directory: 'android/app/build/outputs/apk/release', extension: '.apk', suffix: 'android.apk', label: 'Android 8.0 及以上'},
   'x86_64-pc-windows-msvc': {bundle: 'nsis', extension: '.exe', suffix: 'windows-x64-setup.exe', label: 'Windows 64 位（Intel / AMD）'},
   'aarch64-apple-darwin': {bundle: 'dmg', extension: '.dmg', suffix: 'macos-arm64.dmg', label: 'macOS（Apple M 系列）'},
 };
 
-export function versionOf(directory, tag = '') {
-  const desktop = join(directory, 'desktop');
-  const pkg = json(join(desktop, 'package.json'));
-  const lock = json(join(desktop, 'package-lock.json'));
-  const tauri = json(join(desktop, 'src-tauri/tauri.conf.json'));
-  const cargo = readFileSync(join(desktop, 'src-tauri/Cargo.toml'), 'utf8');
-  const cargoLock = readFileSync(join(desktop, 'src-tauri/Cargo.lock'), 'utf8');
-  const packageSection = cargo.match(/^\[package\]\s*\n([\s\S]*?)(?=^\[|$(?![\s\S]))/m)?.[1];
-  const cargoVersion = packageSection?.match(/^version\s*=\s*"([^"]+)"/m)?.[1];
-  const lockedPackage = cargoLock.split('[[package]]').find(block => /^name\s*=\s*"nas-find-desktop"/m.test(block));
-  const lockedVersion = lockedPackage?.match(/^version\s*=\s*"([^"]+)"/m)?.[1];
-  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(pkg.version)) {
-    throw new Error('客户端版本必须为 major.minor.patch，可附带预发布标识');
+export function versionOf(directory, tag = '') { return validateVersions(directory, tag).version; }
+
+export function checkProgression(current, previous) {
+  if (compareVersions(current.version, previous.version) <= 0) throw Error(`新发布版本必须高于 ${previous.version}`);
+  if (previous.androidVersionCode && current.androidVersionCode <= previous.androidVersionCode) throw Error('Android versionCode 必须高于已发布版本');
+}
+function checkHistory(directory, tag) {
+  const current = readVersion(directory);
+  const tags = execFileSync('git', ['tag', '--list', 'v*'], {cwd: directory, encoding: 'utf8'}).trim().split('\n');
+  for (const old of tags.filter(value => value && value !== tag)) {
+    let previous;
+    try { previous = JSON.parse(execFileSync('git', ['show', `${old}:version.json`], {cwd: directory, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']})); }
+    catch { previous = {version: old.slice(1)}; }
+    checkProgression(current, previous);
   }
-  const versions = {'package-lock.json': lock.version, 'package-lock.json 根包': lock.packages?.['']?.version,
-    'tauri.conf.json': tauri.version, 'Cargo.toml': cargoVersion, 'Cargo.lock': lockedVersion};
-  for (const [name, value] of Object.entries(versions)) {
-    if (value !== pkg.version) throw new Error(`${name} 版本 ${value} 与 package.json 的 ${pkg.version} 不一致`);
-  }
-  if (tag && tag !== `v${pkg.version}`) throw new Error(`标签 ${tag} 与客户端版本 v${pkg.version} 不一致`);
-  return pkg.version;
 }
 
 export function assetName(version, target) {
@@ -41,9 +37,9 @@ export function assetName(version, target) {
 export function stage(directory, target, version) {
   const name = assetName(version, target);
   const config = targets[target];
-  const source = join(directory, 'desktop/src-tauri/target', target, 'release/bundle', config.bundle);
+  const source = config.directory ? join(directory, config.directory) : join(directory, 'desktop/src-tauri/target', target, 'release/bundle', config.bundle);
   const installers = readdirSync(source).filter(name => name.endsWith(config.extension) && statSync(join(source, name)).isFile());
-  if (installers.length !== 1 || statSync(join(source, installers[0])).size === 0) {
+  if (installers.length !== 1 || statSync(join(source, installers[0])).size === 0 || installers[0].includes('unsigned')) {
     throw new Error(`期望一个非空 ${config.extension} 安装包，实际找到 ${installers.length} 个`);
   }
   const output = join(directory, 'dist/release');
@@ -73,7 +69,8 @@ export function assemble(directory, version, repository) {
   writeFileSync(join(directory, 'dist/release-notes.md'), [
     '| 系统 | 下载 |', '|---|---|', ...rows, '',
     `[使用说明](${url}/blob/v${version}/docs/usage.md) · [NAS 部署](${url}/blob/v${version}/docs/deployment.md)`, '',
-    'SHA256SUMS.txt 提供安装包校验值。', '',
+    `Docker：\`ghcr.io/${repository}:v${version}\`（AMD64 / ARM64）。`, '',
+    'Android APK 使用固定发布签名；可与调试包并存。SHA256SUMS.txt 提供安装包校验值。', '',
   ].join('\n'));
 }
 
@@ -82,8 +79,9 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const version = versionOf(root, tag);
   switch (process.argv[2]) {
     case 'validate':
-      if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\nprerelease=${version.includes('-')}\n`);
-      console.log(`客户端版本：${version}`);
+      if (tag) checkHistory(root, tag);
+      if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\nandroid_version_code=${readVersion(root).androidVersionCode}\nprerelease=${version.includes('-')}\n`);
+      console.log(`产品版本：${version}`);
       break;
     case 'stage': console.log(stage(root, process.argv[3], version)); break;
     case 'assemble': assemble(root, version, process.env.GITHUB_REPOSITORY); break;

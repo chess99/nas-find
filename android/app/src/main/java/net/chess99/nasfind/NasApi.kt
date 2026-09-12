@@ -20,6 +20,7 @@ import org.json.JSONObject
 
 class ApiException(val status: Int, message: String) : IOException(message)
 class TransportException(cause: IOException) : IOException(cause.message, cause)
+class CompatibilityException(message: String) : IOException(message)
 
 class NasApi(server: String, @Volatile var session: String = "") {
     val server = normalizeServer(server)
@@ -105,7 +106,7 @@ class NasApi(server: String, @Volatile var session: String = "") {
         }
         session = token
     }
-    suspend fun status() = IndexStatus.from(json("/api/status"))
+    suspend fun status() = IndexStatus.from(json("/api/status")).also { it.checkCompatibility() }
     suspend fun create(query: String, filters: Filters): QueryPage = QueryPage.from(json("/api/query", data = JSONObject()
         .put("query", query.trim()).put("category", filters.category).put("scope", filters.scope)
         .put("extension", filters.extension).put("match_path", filters.matchPath).put("recursive", filters.recursive)))

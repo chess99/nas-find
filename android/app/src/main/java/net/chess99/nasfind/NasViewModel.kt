@@ -508,6 +508,7 @@ class NasViewModel(application: Application) : AndroidViewModel(application) {
     }
     private fun handleError(e: Exception) {
         if (e is CancellationException) throw e
+        if (e is CompatibilityException) { online = false; notice = e.message; return }
         if (e is ApiException) {
             if (e.status == 401) { RemoteFileProvider.clear(); needsLogin = true; online = false; store.forget(); exitSelection() }
             if (e.status == 400 && e.message?.contains("过期") == true) search = search.copy(error = e.message)

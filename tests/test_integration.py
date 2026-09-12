@@ -131,6 +131,13 @@ class Integration(unittest.TestCase):
         with self.request("/api/status") as response:
             self.assertEqual(response.status, 401)
         self.login()
+        with self.request("/api/status") as response:
+            from nasfind import __version__
+            status = json.load(response)
+            self.assertEqual(status["version"], __version__)
+            self.assertEqual(status["api_version"], 1)
+            self.assertEqual(status["min_client_api_version"], 1)
+            self.assertIn("directory-browse", status["capabilities"])
         with self.request("/api/refresh", {}, {"Origin": "http://evil.invalid"}) as response:
             self.assertEqual(response.status, 403)
         for path in ("../outside.txt", "escape.txt", "escape-dir/outside.txt", "node_modules/secret-report.txt"):
