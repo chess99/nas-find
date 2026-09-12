@@ -17,7 +17,7 @@ fun normalizeServer(input: String): String {
     return "${uri.scheme}://${uri.rawAuthority}".trimEnd('/')
 }
 
-data class Filters(val category: String = "all", val scope: String = "", val extension: String = "", val matchPath: Boolean = false) {
+data class Filters(val category: String = "all", val scope: String = "", val extension: String = "", val matchPath: Boolean = false, val recursive: Boolean = true) {
     val count get() = listOf(category != "all", scope.isNotEmpty(), extension.isNotEmpty(), matchPath).count { it }
     fun normalized(): Filters {
         require(category in categories) { "文件类型无效" }
@@ -36,8 +36,32 @@ data class Entry(val index: Int, val path: String, val name: String, val directo
     val extension get() = name.substringAfterLast('.', "").lowercase()
 }
 
+enum class FileKind { IMAGE, TEXT, MEDIA, DOCUMENT, ARCHIVE, PROGRAM, OTHER }
+private fun extensions(value: String) = value.split(' ').toSet()
+val imageExtensions = extensions("jpg jpeg png webp gif heic heif avif bmp tif tiff svg ico raw dng")
+val videoExtensions = extensions("mp4 mkv avi mov webm m4v mpg mpeg wmv flv mts m2ts vob ogv 3gp")
+val audioExtensions = extensions("mp3 flac wav aac m4a ogg opus wma aiff ape alac mid midi")
+val documentExtensions = extensions("pdf doc docx xls xlsx ppt pptx rtf odt ods odp epub mobi csv")
+val archiveExtensions = extensions("zip 7z rar tar gz bz2 xz zst tgz cab iso")
+val programExtensions = extensions("apk apks xapk exe msi msix appx bat cmd ps1 com sh")
+val textExtensions = extensions("txt md log json yaml yml xml ini conf toml py js ts kt java c cpp h css html sql srt vtt")
+fun Entry.kind(mime: String = ""): FileKind = when {
+    extension in programExtensions -> FileKind.PROGRAM
+    extension in documentExtensions || mime == "application/pdf" -> FileKind.DOCUMENT
+    extension in imageExtensions || mime.startsWith("image/") -> FileKind.IMAGE
+    extension in videoExtensions || extension in audioExtensions || mime.startsWith("video/") || mime.startsWith("audio/") -> FileKind.MEDIA
+    extension in textExtensions || mime.startsWith("text/") -> FileKind.TEXT
+    extension in archiveExtensions -> FileKind.ARCHIVE
+    else -> FileKind.OTHER
+}
+fun Entry.mime(fallback: String): String = if (fallback != "application/octet-stream" && fallback.isNotBlank()) fallback else when (extension) {
+    "flv" -> "video/x-flv"; "avi" -> "video/x-msvideo"; "mkv" -> "video/x-matroska"; "mp4", "m4v" -> "video/mp4"
+    "mp3" -> "audio/mpeg"; "m4a" -> "audio/mp4"; "pdf" -> "application/pdf"
+    else -> fallback.ifBlank { "application/octet-stream" }
+}
+
 data class IndexStatus(val available: Boolean = false, val scanning: Boolean = false, val dirty: Boolean = false,
-    val error: String? = null, val entries: Long = 0) {
+    val error: String? = null, val entries: Long = 0, val directoryBrowse: Boolean = false) {
     val label get() = when {
         !available && error != null -> "索引不可用"
         !available -> "正在建立索引"
@@ -48,7 +72,8 @@ data class IndexStatus(val available: Boolean = false, val scanning: Boolean = f
     }
     companion object {
         fun from(json: JSONObject) = IndexStatus(json.optBoolean("available"), json.optBoolean("scanning"),
-            json.optBoolean("dirty"), json.nullableString("error"), json.optLong("entries"))
+            json.optBoolean("dirty"), json.nullableString("error"), json.optLong("entries"),
+            json.optJSONArray("capabilities")?.let { a -> (0 until a.length()).any { a.optString(it) == "directory-browse" } } == true)
     }
 }
 

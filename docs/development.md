@@ -143,7 +143,7 @@ adb -s <设备序列号> install -r android/app/build/outputs/apk/androidTest/de
 adb -s <设备序列号> shell am instrument -w -r -e class net.chess99.nasfind.ClientFlowTest net.chess99.nasfind.debug.test/androidx.test.runner.AndroidJUnitRunner
 ```
 
-上面直接安装命令从仓库根目录执行。用例通过手机上的合成 HTTP 服务验证查询竞态、分页、多选、文本/图片/PDF、音频播放、旋转恢复、登录过期、加密会话、CSV 准备和系统保存/取消；测试 APK 内的独立接收应用还会验证 FileProvider 读取授权。测试数据和接收应用不进入客户端 APK。测试完成后可用 `adb -s <设备序列号> uninstall net.chess99.nasfind.debug.test` 移除测试包。
+上面直接安装命令从仓库根目录执行。用例通过手机上的合成 HTTP 服务验证查询竞态、分页、多选、文本/图片、目录浏览、外部打开、可寻址媒体读取与拖动、旋转恢复、登录过期、加密会话、CSV 准备和系统保存/取消；测试 APK 内的独立接收应用还会验证 FileProvider 读取授权。测试数据和接收应用不进入客户端 APK。测试完成后可用 `adb -s <设备序列号> uninstall net.chess99.nasfind.debug.test` 移除测试包。
 
 已有 NAS 的只读检查需显式提供被忽略的 JSON 文件，包含 `url` 和 `password`。先安装调试 APK 及测试 APK，再从仓库根目录运行：
 
@@ -245,3 +245,17 @@ python3 -m unittest discover -s tests -v
 发布前检查历史中的凭据和私人文件清单，公开示例使用通用路径和主机名。
 
 不要提交 `.local/`、凭据、真实文件清单、日志、`node_modules/`、`target/` 或生成的共用前端副本。提交前检查暂存区，只包含本次修改；并行任务的改动保留原状。
+
+## Android 文件访问与兼容性验证
+
+Android 0.2 使用 `FileKind` 统一默认打开与文件图标分类。图片和文本在客户端查看；文档准备本地副本后直接发出 `ACTION_VIEW`，只有“打开方式”显式使用选择器。保存文件的系统选址在下载之前完成，路径清单仍须完整生成后选址，防止发布不完整清单。
+
+`RemoteFileProvider` 通过 Android 8.0 起的 `StorageManager.openProxyFileDescriptor` 提供只读、可随机读取的媒体入口。授权只包含随机 URI，原始地址和登录会话保留在应用进程；`RangeReader` 以 256 KiB 块请求 HTTP Range，每个描述符最多保留 8 块。打开前验证一个小片段，服务忽略 Range、鉴权失败或网络故障会显示可重试的错误。退出或更换连接撤销授权；接收应用需在客户端进程存活期间使用入口。
+
+`/api/status` 的 `capabilities` 包含 `directory-browse` 时，Android 才启用逐级浏览。查询新增 `recursive` 布尔值，默认 `true` 保持旧客户端行为；`false` 在分页和选择之前限定直接子项。`/api/directories?scope=<相对目录>&offset=0` 从目录索引返回直接子文件夹，每页 200 项，不触碰源文件。文件信息的 `version` 用于区分本地缓存副本。
+
+设备回归覆盖 `ClientFlowTest` 和 `RemoteFileTest`。后者通过真实文件描述符检查跳读、缓存上界、只读授权与撤销，并让 Android 播放器准备、播放和拖动合成 MP4。合成视频只在测试 APK 中，生成方式为 FFmpeg `testsrc2`（320×180、10 fps、30 秒、H.264、无音轨）。
+
+另有显式真实媒体检查 `MediaHandoffProbe`，不会在默认测试中使用真实 NAS。先按照上面的只读 NAS 检查保存登录，再指定 `mediaExtension`（mp4/flv/avi）及实际已安装的 `mediaPackage` 运行该测试类。它打开该类型的第一个搜索结果，保留 45 秒供人工观察播放与拖动，截图仅存于设备私有的测试输出目录。该检查的“应用已打开”断言不能代替人工确认画面和进度；不要将截图、真实文件名或连接信息提交仓库。
+
+原生 SSH 部署包包含 `docker/`，以便临时部署目录中的完整服务端测试可导入容器入口；这不会将原生部署切换为 Docker。

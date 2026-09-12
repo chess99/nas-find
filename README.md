@@ -6,7 +6,7 @@
 
 索引在 NAS 本机统一维护，多个设备共用，客户端无需各自扫描共享目录建立索引。搜索结果按需传输，桌面客户端通过 SMB 共享（Windows UNC / 映射盘，macOS Finder 挂载目录），用系统默认应用打开原文件。
 
-Android 客户端支持搜索、筛选、预览、保存文件和导出路径清单。用其他应用打开时先下载临时副本，修改不会写回 NAS。目前提供源码构建和 Actions 调试包，安装见[开发文档](docs/development.md#android-构建与安装)，操作见[使用说明](docs/usage.md#android-客户端)。
+Android 客户端支持搜索、文件夹浏览、图片与文本查看、保存和导出路径清单。音视频可通过系统播放器按需读取；文档由系统应用打开临时副本，修改不会写回 NAS。目前提供源码构建和 Actions 调试包，安装见[开发文档](docs/development.md#android-构建与安装)，操作见[使用说明](docs/usage.md#android-客户端)。
 
 ## 定位与取舍
 

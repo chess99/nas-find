@@ -20,7 +20,7 @@ CATEGORIES = {
     "image": "jpg jpeg png webp gif heic heif avif bmp tif tiff svg ico raw dng",
     "document": "pdf doc docx xls xlsx ppt pptx txt md rtf odt ods odp epub mobi csv",
     "archive": "zip 7z rar tar gz bz2 xz zst tgz cab iso",
-    "program": "exe msi msix appx bat cmd ps1 com",
+    "program": "apk apks xapk exe msi msix appx bat cmd ps1 com sh",
 }
 CATEGORIES = {k: frozenset(v.split()) for k, v in CATEGORIES.items()}
 
@@ -138,7 +138,8 @@ class Queries:
         extension = extension.lower().lstrip(".")
         category = data.get("category", "all")
         match_path = data.get("match_path", False)
-        if not isinstance(query, str) or len(query) > 300 or type(match_path) is not bool:
+        recursive = data.get("recursive", True)
+        if not isinstance(query, str) or len(query) > 300 or type(match_path) is not bool or type(recursive) is not bool:
             raise ValueError("搜索条件无效")
         if not isinstance(category, str) or category not in {"all", "folder", *CATEGORIES}:
             raise ValueError("文件类型无效")
@@ -162,10 +163,20 @@ class Queries:
                 del self.jobs[old.id]
             job = Snapshot(self.directory, owner)
             self.jobs[job.id] = job
-            self.pool.submit(self._build, job, terms, scope, extension, category, match_path)
+            self.pool.submit(self._build, job, terms, scope, extension, category, match_path, recursive)
         return job.info()
 
-    def _build(self, job, terms, scope, extension, category, match_path):
+    def directories(self, scope="", offset=0):
+        scope = self.engine.scope.relative_scope(scope)
+        offset = int(offset)
+        if offset < 0:
+            raise ValueError("分页参数无效")
+        with self.engine.lock:
+            directories = self.engine.index_dirs
+        paths = sorted(p for p in directories if p.rpartition("/")[0] == scope and not self.engine.scope.excluded(p))
+        return {"total": len(paths), "paths": paths[offset:offset + 200]}
+
+    def _build(self, job, terms, scope, extension, category, match_path, recursive=True):
         started = time.monotonic()
         timer = None
         try:
@@ -211,6 +222,8 @@ class Queries:
                             continue
                         path = path[len(prefix):]
                         if self.engine.scope.excluded(path) or (scope and not path.startswith(scope + "/")):
+                            continue
+                        if not recursive and path.rpartition("/")[0] != scope:
                             continue
                         if match_path and not all(self._matches(path, term) for term in terms):
                             continue

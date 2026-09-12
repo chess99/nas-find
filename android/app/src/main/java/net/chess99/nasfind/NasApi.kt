@@ -31,6 +31,37 @@ class NasApi(server: String, @Volatile var session: String = "") {
         params.forEach { (key, value) -> addQueryParameter(key, value) }
     }.build().toString()
     fun fileUrl(path: String) = url("/api/file", mapOf("path" to path))
+    suspend fun probeFile(path: String, length: Long) {
+        val end = minOf(4095, length - 1)
+        exchange(request("/api/file", mapOf("path" to path)).newBuilder().header("Range", "bytes=0-$end").build()) { response, _ ->
+            if (response.code != 206 || response.header("Content-Range") != "bytes 0-$end/$length")
+                throw IOException("服务不支持按需读取，请更新服务端或检查代理")
+            val input = response.body!!.byteStream()
+            repeat((end + 1).toInt()) { if (input.read() < 0) throw IOException("文件读取不完整") }
+        }
+    }
+    // Android's media process does not share this app's network configuration or authentication.
+    // Keep all NAS I/O here, including reads requested by external players through a file grant.
+    fun readRange(path: String, start: Long, end: Long, length: Long): ByteArray {
+        val request = request("/api/file", mapOf("path" to path)).newBuilder()
+            .header("Range", "bytes=$start-$end").header("Accept-Encoding", "identity").build()
+        client.newBuilder().callTimeout(15, TimeUnit.SECONDS).build().newCall(request).execute().use { response ->
+            if (response.code == 401) throw ApiException(401, "需要重新登录")
+            if (response.code == 404) throw ApiException(404, "文件不存在或已移动")
+            if (response.code != 206 || response.header("Content-Range") != "bytes $start-$end/$length")
+                throw IOException("服务未返回所需文件片段，请检查服务版本或代理设置")
+            val expected = (end - start + 1).toInt()
+            val result = ByteArray(expected)
+            val input = response.body?.byteStream() ?: throw IOException("文件没有内容")
+            var offset = 0
+            while (offset < expected) {
+                val count = input.read(result, offset, expected - offset)
+                if (count < 0) throw IOException("文件读取不完整")
+                offset += count
+            }
+            return result
+        }
+    }
     fun request(path: String, params: Map<String, String> = emptyMap(), data: JSONObject? = null): Request =
         Request.Builder().url(url(path, params)).apply {
             if (session.isNotEmpty()) header("Cookie", "nasfind_session=$session")
@@ -77,7 +108,7 @@ class NasApi(server: String, @Volatile var session: String = "") {
     suspend fun status() = IndexStatus.from(json("/api/status"))
     suspend fun create(query: String, filters: Filters): QueryPage = QueryPage.from(json("/api/query", data = JSONObject()
         .put("query", query.trim()).put("category", filters.category).put("scope", filters.scope)
-        .put("extension", filters.extension).put("match_path", filters.matchPath)))
+        .put("extension", filters.extension).put("match_path", filters.matchPath).put("recursive", filters.recursive)))
     suspend fun page(id: String, offset: Int) = QueryPage.from(json("/api/query", mapOf("id" to id, "offset" to "$offset", "limit" to "$PAGE_SIZE")))
     suspend fun cancel(id: String) { json("/api/query/cancel", data = JSONObject().put("id", id)) }
     suspend fun selected(id: String, selection: Selection, cursor: Int) = json("/api/query/selection", data = JSONObject()
@@ -86,11 +117,16 @@ class NasApi(server: String, @Volatile var session: String = "") {
 
     /** Stream into a caller-owned temporary file. Cancellation aborts the socket, including blocked reads. */
     suspend fun download(path: String, target: File, maxBytes: Long = Long.MAX_VALUE, progress: (Long, Long) -> Unit = { _, _ -> }) {
+        downloadTo(path, { target.outputStream() }, maxBytes, progress)
+    }
+
+    suspend fun downloadTo(path: String, open: () -> java.io.OutputStream, maxBytes: Long = Long.MAX_VALUE,
+        progress: (Long, Long) -> Unit = { _, _ -> }) {
         exchange(request("/api/file", mapOf("path" to path))) { response, active ->
             val body = response.body ?: throw IOException("文件没有内容")
             val size = body.contentLength()
             require(size <= maxBytes) { "文件过大，请保存到手机后用其他应用打开" }
-            body.byteStream().use { source -> target.outputStream().use { sink ->
+            body.byteStream().use { source -> open().use { sink ->
                 val buffer = ByteArray(64 * 1024)
                 var received = 0L; var lastUpdate = 0L
                 while (true) {

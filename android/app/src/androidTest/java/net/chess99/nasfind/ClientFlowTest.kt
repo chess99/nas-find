@@ -53,6 +53,10 @@ class ClientFlowTest {
         2 -> Entry(i, "照片/旅行照片.png", "旅行照片.png")
         3 -> Entry(i, "文档/旅行素材", "旅行素材", true)
         4 -> Entry(i, "音频/旅行录音.wav", "旅行录音.wav")
+        5 -> Entry(i, "文档/旅行素材/子目录", "子目录", true)
+        6 -> Entry(i, "文档/旅行素材/子目录/深层.txt", "深层.txt")
+        7 -> Entry(i, "文档/旅行素材/说明.txt", "说明.txt")
+        8 -> Entry(i, "照片/第二张.png", "第二张.png")
         else -> Entry(i, "资料/旅行记录-${i.toString().padStart(4, '0')}.txt", "旅行记录-${i.toString().padStart(4, '0')}.txt")
     } }
     private val textContent = "这是一份合成的旅行日记。\n只用于 Android 客户端验证。"
@@ -82,7 +86,7 @@ class ClientFlowTest {
                 if (path == "/api/login") return json(JSONObject().put("ok", true)).setHeader("Set-Cookie", "nasfind_session=synthetic-session; Path=/; HttpOnly")
                 if (expired) return json(JSONObject().put("error", "请先登录")).setResponseCode(401)
                 if (request.getHeader("Cookie") != "nasfind_session=synthetic-session") return MockResponse().setResponseCode(401)
-                if (path == "/api/status") return json(JSONObject().put("available", true).put("entries", all.size).put("scanning", false))
+                if (path == "/api/status") return json(JSONObject().put("available", true).put("entries", all.size).put("scanning", false).put("capabilities", JSONArray(listOf("directory-browse"))))
                 if (path in listOf("/api/logout", "/api/query/cancel", "/api/refresh")) return json(JSONObject().put("ok", true))
                 if (path == "/api/query" && request.method == "POST") {
                     val body = JSONObject(request.body.readUtf8()); val word = body.getString("query")
@@ -91,7 +95,8 @@ class ClientFlowTest {
                         (word.isEmpty() || it.name.contains(word) || word == "slow") &&
                             (body.optString("extension").isEmpty() || it.extension == body.optString("extension")) &&
                             (body.optString("category") != "folder" || it.directory) &&
-                            (body.optString("scope").isEmpty() || it.path.startsWith(body.optString("scope") + "/"))
+                            (body.optString("scope").isEmpty() || it.path.startsWith(body.optString("scope") + "/")) &&
+                            (body.optBoolean("recursive", true) || it.parent == body.optString("scope"))
                     }.mapIndexed { index, entry -> entry.copy(index = index) }
                     val id = "test-${serial.incrementAndGet()}"; snapshots[id] = rows
                     return json(info(id, rows)).setResponseCode(202)
@@ -143,7 +148,7 @@ class ClientFlowTest {
     }
     private fun json(value: JSONObject) = MockResponse().setHeader("Content-Type", "application/json").setBody(value.toString())
     private fun info(id: String, rows: List<Entry>) = JSONObject().put("id", id).put("total", rows.size).put("complete", true).put("error", JSONObject.NULL)
-    private fun browse() { ui.onNodeWithTag("browse-all").performClick(); ui.waitUntil(15000) { vm.search.ready && vm.search.entry(0) != null } }
+    private fun browse() { ui.runOnIdle { vm.submit("") }; ui.waitUntil(15000) { vm.search.ready && vm.search.entry(0) != null } }
     private fun screenshot(name: String) {
         val file = File(ui.activity.getExternalFilesDir("screenshots"), "$name.png")
         ui.waitForIdle()
@@ -173,16 +178,8 @@ class ClientFlowTest {
         ui.onNodeWithTag("apply-filters").performClick()
         ui.waitUntil(10000) { vm.search.ready && vm.search.total == 1 && vm.search.entry(0)?.extension == "pdf" }
         screenshot("results")
-        ui.onNodeWithTag("file-0").performClick()
-        ui.waitUntil(10000) { vm.preview?.loading == false }
-        ui.onNodeWithText("加载 PDF").performClick()
-        ui.waitUntil(10000) { vm.preview?.bitmap != null }
-        ui.onNodeWithText("下一页").performClick()
-        ui.waitUntil(10000) { vm.preview?.page == 1 && vm.preview?.loading == false }
-        screenshot("pdf")
         ui.activityRule.scenario.recreate()
-        ui.onNodeWithText("2 / 2").assertIsDisplayed()
-        ui.onNodeWithContentDescription("返回搜索结果").performClick()
+        ui.onNodeWithTag("file-0").assertIsDisplayed()
         assertEquals("pdf", vm.filters.extension); assertEquals(1, vm.search.total)
     }
 
@@ -199,6 +196,30 @@ class ClientFlowTest {
         val stored = prefs.getString("session", "")!!
         assertFalse(stored.contains("synthetic-session")); assertEquals("synthetic-session", ConnectionStore(ui.activity).token())
         assertFalse(prefs.all.values.any { it.toString().contains("synthetic-password") })
+    }
+
+    @Test fun foldersShowChildrenAndBackRestoresSearch() {
+        browse()
+        val snapshot = vm.search.id
+        ui.onNodeWithTag("file-3").performClick()
+        ui.waitUntil(10000) { vm.search.ready && vm.inFolder && vm.search.total == 2 && vm.search.entry(0) != null }
+        assertEquals(setOf("子目录", "说明.txt"), vm.search.pages.values.flatten().map { it.name }.toSet())
+        ui.onNodeWithContentDescription("返回").performClick()
+        ui.waitUntil(10000) { vm.search.id == snapshot && vm.search.total == 630 }
+        assertFalse(vm.inFolder)
+    }
+
+    @Test fun nextImageSkipsNonImagesAndRetainsResults() {
+        browse()
+        val snapshot = vm.search.id
+        ui.onNodeWithTag("file-2").performClick()
+        ui.waitUntil(10000) { vm.preview?.bitmap != null }
+        ui.onNodeWithText("下一张").performClick()
+        ui.waitUntil(10000) { vm.preview?.entry?.index == 8 && vm.preview?.bitmap != null }
+        ui.activityRule.scenario.recreate()
+        ui.onNodeWithText("第二张.png").assertIsDisplayed()
+        ui.onNodeWithContentDescription("返回搜索结果").performClick()
+        assertEquals(snapshot, vm.search.id)
     }
 
     @Test fun latestQueryWinsAndSessionExpiryPreservesQuery() {
@@ -219,7 +240,7 @@ class ClientFlowTest {
         browse()
         ui.runOnIdle { vm.beginSelection(); vm.selectAll(); vm.exportSelection(true) }
         ui.waitUntil(15000) { vm.pendingSave != null }
-        val content = vm.pendingSave!!.file.readText()
+        val content = vm.pendingSave!!.file!!.readText()
         assertTrue(content.startsWith("\uFEFFNAS相对路径\r\n"))
         assertTrue(content.contains(csvPath(all.last().path)))
         assertEquals(631, content.split("\r\n").filter { it.isNotEmpty() }.size)
@@ -259,7 +280,7 @@ class ClientFlowTest {
         ContextCompat.registerReceiver(ui.activity, receiver, IntentFilter("net.chess99.nasfind.TEST_OPENED"), ContextCompat.RECEIVER_EXPORTED)
         try {
             ui.onNodeWithTag("more-0").performClick()
-            ui.onNodeWithText("用其他应用打开").performClick()
+            ui.onNodeWithText("打开方式").performClick()
             val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
             ui.waitUntil(10000) { device.currentPackageName != ui.activity.packageName && device.currentPackageName != null }
             val app = device.wait(Until.findObject(By.text("NAS Find test receiver")), 10000)
@@ -270,22 +291,19 @@ class ClientFlowTest {
         } finally { ui.activity.unregisterReceiver(receiver) }
     }
 
-    @Test fun authenticatedAudioStreamStartsPlayback() {
+    @Test fun saveDestinationCancellationDoesNotDownloadFile() {
         browse()
-        ui.onNodeWithTag("file-4").performClick()
-        ui.waitUntil(10000) { vm.preview?.loading == false }
-        ui.onNodeWithText("播放").performClick()
-        fun player(view: android.view.View): android.widget.VideoView? {
-            if (view is android.widget.VideoView) return view
-            if (view is android.view.ViewGroup) for (i in 0 until view.childCount) player(view.getChildAt(i))?.let { return it }
-            return null
-        }
-        ui.waitUntil(10000) {
-            var playing = false
-            InstrumentationRegistry.getInstrumentation().runOnMainSync { playing = player(ui.activity.findViewById(android.R.id.content))?.isPlaying == true }
-            playing
-        }
-        ui.onNodeWithContentDescription("返回搜索结果").performClick()
-        assertNull(vm.preview)
+        ui.onNodeWithTag("more-0").performClick()
+        ui.onNodeWithTag("save-file").performClick()
+        ui.waitUntil(10000) { vm.pendingSave != null }
+        assertNull(vm.pendingSave!!.file)
+        val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+        ui.waitUntil(10000) { device.currentPackageName?.contains("documentsui") == true }
+        device.pressBack()
+        ui.waitUntil(10000) { vm.pendingSave == null }
+        assertNull(vm.savedDocument)
+        val requests = mutableListOf<RecordedRequest>()
+        repeat(server.requestCount) { server.takeRequest(100, java.util.concurrent.TimeUnit.MILLISECONDS)?.let(requests::add) }
+        assertTrue(requests.none { it.requestUrl?.encodedPath == "/api/file" })
     }
 }

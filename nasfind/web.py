@@ -148,7 +148,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(401, {"error": "请先登录"})
             engine = self.server.engine
             if url.path == "/api/status":
-                return self._json(200, engine.status())
+                return self._json(200, {**engine.status(), "capabilities": ["directory-browse"]})
+            if url.path == "/api/directories":
+                return self._json(200, self.server.queries.directories(arg("scope"), arg("offset", "0")))
             if url.path == "/api/search":
                 return self._json(200, engine.search(arg("q"), arg("scope"), arg("ext"), arg("limit", "100")))
             if url.path == "/api/query":
@@ -241,6 +243,7 @@ class Handler(BaseHTTPRequestHandler):
             if not (stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode)):
                 raise PermissionError("不支持此文件类型")
             self._json(200, {"size": info.st_size, "modified": info.st_mtime,
+                             "version": f"{info.st_size}:{info.st_mtime_ns}",
                              "directory": stat.S_ISDIR(info.st_mode),
                              "mime": mimetypes.guess_type(path)[0] or "application/octet-stream"})
         finally:

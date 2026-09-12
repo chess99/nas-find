@@ -108,6 +108,24 @@ class QuerySnapshots(unittest.TestCase):
         self.queries.get("owner", key).complete = False
         with self.assertRaises(ValueError): self.queries.selected("owner", {"id": key, "selection": select})
 
+    def test_directory_browsing_is_direct_children_before_paging_and_selection(self):
+        self.assertEqual(set(self.queries.directories()["paths"]), {"a", "z", "旅行", "other", "目录.mp4"})
+        self.assertEqual(self.queries.directories("旅行")["paths"], [])
+        with self.assertRaises(ValueError): self.queries.directories("..")
+        with self.assertRaises(ValueError): self.queries.directories("", -1)
+        key = self.query(recursive=False)
+        root = self.queries.page("owner", key)
+        self.assertEqual(root["total"], 7)
+        self.assertTrue(all("/" not in row["path"] for row in root["results"]))
+        key = self.query(scope="旅行", recursive=False)
+        self.assertEqual({r["path"] for r in self.queries.page("owner", key)["results"]}, {"旅行/片段.mp4", "旅行/说明.txt"})
+        key = self.query(scope="z", recursive=False, category="video")
+        self.assertEqual(self.queries.page("owner", key, 500)["total"], 620)
+        self.assertEqual(len(self.queries.page("owner", key, 500)["results"]), 120)
+        selected = self.queries.selected("owner", {"id": key, "selection": {"all": True}, "cursor": 0})
+        self.assertEqual(selected["selected_total"], 620)
+        with self.assertRaises(ValueError): self.queries.create("owner", {"recursive": "false"})
+
     def test_snapshot_survives_index_publish_and_expiry_is_explicit(self):
         key = self.query(query="needle", category="video")
         before = self.queries.page("owner", key, 600)

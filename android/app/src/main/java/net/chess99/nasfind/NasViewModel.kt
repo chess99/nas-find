@@ -3,9 +3,7 @@ package net.chess99.nasfind
 import android.app.Application
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.graphics.pdf.PdfRenderer
 import android.net.Uri
-import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -28,11 +26,13 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 data class Transfer(val label: String, val done: Long = 0, val total: Long = -1, val unit: String = "字节")
-data class PreparedFile(val file: File, val name: String, val mime: String)
+data class PreparedFile(val file: File?, val name: String, val mime: String, val remote: Entry? = null)
 data class SavedDocument(val uri: Uri, val mime: String)
+data class OpenFile(val uri: Uri, val name: String, val mime: String, val entry: Entry, val chooser: Boolean = false, val share: Boolean = false)
+data class FileFailure(val entry: Entry, val message: String, val save: Boolean, val chooser: Boolean, val share: Boolean)
 data class Preview(val entry: Entry, val mime: String = "", val loading: Boolean = true, val error: String? = null,
     val text: String? = null, val truncated: Boolean = false, val bitmap: Bitmap? = null,
-    val pdf: File? = null, val page: Int = 0, val pageCount: Int = 0)
+    val done: Long = 0, val total: Long = -1)
 private data class SearchFrame(val query: String, val filters: Filters, val search: SearchState, val scroll: Pair<Int, Int>)
 
 class NasViewModel(application: Application) : AndroidViewModel(application) {
@@ -60,7 +60,8 @@ class NasViewModel(application: Application) : AndroidViewModel(application) {
     var preview by mutableStateOf<Preview?>(null); private set
     var transfer by mutableStateOf<Transfer?>(null); private set
     var pendingSave by mutableStateOf<PreparedFile?>(null); private set
-    var pendingOpen by mutableStateOf<PreparedFile?>(null)
+    var pendingOpen by mutableStateOf<OpenFile?>(null)
+    var fileFailure by mutableStateOf<FileFailure?>(null)
     var savedDocument by mutableStateOf<SavedDocument?>(null); private set
     var clipboardText by mutableStateOf<String?>(null)
     var pickerActive = false
@@ -70,9 +71,12 @@ class NasViewModel(application: Application) : AndroidViewModel(application) {
     val canSearch get() = online && !needsLogin && status.available
     val canOperateResults get() = canSearch && !editing
     val stateLabel get() = when { needsLogin -> "需要重新登录"; !online -> "连接中断"; else -> status.label }
+    val inFolder get() = browsing && !filters.recursive
     private var queryJob: Job? = null
     private var inputJob: Job? = null
     private var previewJob: Job? = null
+    private var imageNavigation: Job? = null
+    var movingImage by mutableStateOf(false); private set
     private var transferJob: Job? = null
     private var revision = 0
     private val createMutex = Mutex()
@@ -105,6 +109,7 @@ class NasViewModel(application: Application) : AndroidViewModel(application) {
                 val newStatus = candidate.status()
                 val changed = server != candidate.server
                 store.saveConnection(candidate.server, displayName.trim().ifEmpty { "我的 NAS" }, candidate.session)
+                if (changed) RemoteFileProvider.clear()
                 api = candidate; server = store.server; name = store.name
                 status = newStatus; online = true; needsLogin = false; settings = false; importedConnection = null
                 history = store.history(); backStack.clear(); exitSelection()
@@ -147,7 +152,7 @@ class NasViewModel(application: Application) : AndroidViewModel(application) {
         if (busy) { notice = "请先完成或取消当前传输"; return }
         val old = api
         revision++; inputJob?.cancel(); queryJob?.cancel(); closePreview()
-        api = null; store.forget(); needsLogin = true; online = false; settings = false
+        RemoteFileProvider.clear(); api = null; store.forget(); needsLogin = true; online = false; settings = false
         browsing = false; editing = false; search = SearchState(); backStack.clear(); exitSelection()
         clearCache(silent = true)
         viewModelScope.launch { runCatching { old?.logout() } }
@@ -155,22 +160,37 @@ class NasViewModel(application: Application) : AndroidViewModel(application) {
 
     fun input(value: String, composing: Boolean) {
         if (selectionMode) return
+        if (!filters.recursive && value.isNotEmpty()) {
+            backStack.addLast(SearchFrame(query, filters, search, scroll)); filters = filters.copy(recursive = true)
+        }
         query = value.take(300); inputJob?.cancel(); editing = true
         // Immediately detach from the old query so its response cannot overwrite this input.
         revision++; queryJob?.cancel(); exitSelection()
         if (!composing) inputJob = viewModelScope.launch { delay(300); startSearch() }
     }
-    fun submit(value: String = query) { query = value.take(300); inputJob?.cancel(); startSearch() }
-    fun browseAll() { query = ""; filters = Filters(); backStack.clear(); startSearch() }
+    fun submit(value: String = query) {
+        if (!filters.recursive && value.isNotEmpty()) { backStack.addLast(SearchFrame(query, filters, search, scroll)); filters = filters.copy(recursive = true) }
+        query = value.take(300); recordSearch(); inputJob?.cancel(); startSearch()
+    }
+    private fun recordSearch() { store.record(query.trim()); history = store.history() }
+    fun browseAll() { query = ""; filters = Filters(recursive = false); backStack.clear(); startSearch() }
+    fun searchFolder() { backStack.addLast(SearchFrame(query, filters, search, scroll)); filters = filters.copy(recursive = true); startSearch() }
+    fun parentFolder() {
+        if (filters.scope.isEmpty()) { backSearch(); return }
+        enterDirectory(Entry(-1, filters.scope.substringBeforeLast('/', ""), "", true))
+    }
     fun applyFilters(value: Filters) { filters = value.normalized(); inputJob?.cancel(); startSearch() }
     fun startSearch() {
         if (!canSearch) { notice = if (needsLogin) "请先连接 NAS" else "当前无法搜索，请检查连接和索引状态"; return }
+        if (!filters.recursive && !status.directoryBrowse) {
+            filters = filters.copy(recursive = true)
+            notice = "服务端需更新后才能逐级浏览，当前显示此目录的搜索结果"
+        }
         queryJob?.cancel(); val current = ++revision
         val source = api ?: return
         val term = query; val options = filters
         val previousId = search.id
         browsing = true; editing = false; search = SearchState(); exitSelection(); scroll = 0 to 0
-        store.record(term.trim()); history = store.history()
         queryJob = viewModelScope.launch {
             try {
                 // Finish each create handshake before starting another; an older server request must not cancel a newer query.
@@ -189,7 +209,7 @@ class NasViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { if (current == revision) { handleError(e); search = search.copy(error = message(e)) } }
             finally {
-                if (previousId.isNotEmpty()) runCatching { source.cancel(previousId) }
+                if (previousId.isNotEmpty() && backStack.none { it.search.id == previousId }) runCatching { source.cancel(previousId) }
             }
         }
     }
@@ -229,16 +249,17 @@ class NasViewModel(application: Application) : AndroidViewModel(application) {
     }
     fun enterDirectory(entry: Entry, preserve: Boolean = false) {
         backStack.addLast(SearchFrame(query, filters, search, scroll))
-        if (preserve) filters = filters.copy(scope = entry.parent)
-        else { query = ""; filters = Filters(scope = entry.path) }
+        query = ""; filters = Filters(scope = if (preserve) entry.parent else entry.path, recursive = false)
         startSearch()
     }
     fun backSearch() {
+        if (!editing) recordSearch()
         revision++; inputJob?.cancel(); queryJob?.cancel(); exitSelection(); editing = false
         if (backStack.isNotEmpty()) {
             val frame = backStack.removeLast()
             query = frame.query; filters = frame.filters; search = frame.search; scroll = frame.scroll
-            loadPage(scroll.first / PAGE_SIZE * PAGE_SIZE, retry = true)
+            if (search.ready) loadPage(scroll.first / PAGE_SIZE * PAGE_SIZE, retry = true)
+            else startSearch()
         } else { browsing = false; query = ""; filters = Filters(); search = SearchState(); scroll = 0 to 0 }
     }
     fun choose(entry: Entry) { selectionMode = true; selection = selection.toggle(entry.index) }
@@ -258,47 +279,80 @@ class NasViewModel(application: Application) : AndroidViewModel(application) {
         val safe = name.replace(Regex("[\\\\/\\p{Cntrl}]"), "_").takeLast(100).ifEmpty { "file" }
         return File(dir, UUID.randomUUID().toString() + "_" + safe)
     }
-    private fun startTransfer(label: String, operation: suspend () -> Unit) {
+    private fun startTransfer(label: String, failed: ((String) -> Unit)? = null, operation: suspend () -> Unit) {
         if (busy) { notice = "已有任务，请完成或取消后重试"; return }
         if (!canSearch) { notice = "请先恢复 NAS 连接"; return }
         transfer = Transfer(label)
         transferJob = viewModelScope.launch {
             try { operation() }
             catch (e: CancellationException) { notice = "已取消，未保存文件"; throw e }
-            catch (e: Exception) { handleError(e); notice = message(e) }
+            catch (e: Exception) { handleError(e); if (failed != null) failed(message(e)) else notice = message(e) }
             finally { transfer = null; updateCacheSize() }
         }
     }
     fun cancelTransfer() { transferJob?.cancel() }
-    fun fileAction(entry: Entry, save: Boolean) {
+    fun fileAction(entry: Entry, save: Boolean, chooser: Boolean = true, share: Boolean = false) {
         val source = api ?: return
-        startTransfer(if (save) "正在准备保存" else "正在准备外部打开") {
-            val final = outgoing(entry.name); val part = File(final.path + ".part")
+        recordSearch()
+        fileFailure = null
+        startTransfer("${entry.name} · 正在连接", { fileFailure = FileFailure(entry, it, save, chooser, share) }) {
+            var final = outgoing(entry.name); var part = File(final.path + ".part")
             var published = false
+            var created = false
             try {
                 val info = source.json("/api/info", mapOf("path" to entry.path))
-                source.download(entry.path, part) { done, total -> viewModelScope.launch {
-                    if (transferJob?.isActive == true) transfer = transfer?.copy(done = done, total = total)
-                } }
-                currentCoroutineContext().ensureActive()
-                withContext(Dispatchers.IO) { check(part.renameTo(final)) { "无法准备本地文件" } }
-                val prepared = PreparedFile(final, entry.name, info.optString("mime", "application/octet-stream"))
+                val mime = entry.mime(info.optString("mime", "application/octet-stream"))
+                if (save) {
+                    pendingSave = PreparedFile(null, entry.name, mime, entry); pickerActive = false
+                    return@startTransfer
+                }
+                if (!save && !share && entry.kind(mime) == FileKind.MEDIA) {
+                    val size = info.getLong("size")
+                    require(size > 0) { "文件为空" }
+                    source.probeFile(entry.path, size)
+                    val uri = RemoteFileProvider.register(getApplication(), RemoteFileProvider.Grant(source, entry.path,
+                        entry.name, mime, size, info.optLong("modified")))
+                    pendingOpen = OpenFile(uri, entry.name, mime, entry, chooser)
+                    return@startTransfer
+                }
+                transfer = transfer?.copy(label = "${entry.name} · 正在下载")
+                final = LocalCopies(File(getApplication<Application>().cacheDir, "outgoing"))
+                    .file(source.server, entry.path, entry.name, info.optLong("size"), info.optString("version", info.optString("modified")))
+                part = File(final.path + ".part")
+                val cached = withContext(Dispatchers.IO) { final.isFile && final.length() == info.optLong("size") }
+                if (!cached) {
+                    val free = withContext(Dispatchers.IO) { android.os.StatFs(getApplication<Application>().cacheDir.path).availableBytes }
+                    require(info.optLong("size") < free - 16L * 1024 * 1024) { "手机空间不足，请释放空间后重试" }
+                    source.download(entry.path, part) { done, total -> viewModelScope.launch {
+                        if (transferJob?.isActive == true) transfer = transfer?.copy(done = done, total = total)
+                    } }
+                    currentCoroutineContext().ensureActive()
+                    withContext(Dispatchers.IO) { check(part.renameTo(final)) { "无法准备本地文件" }; created = true }
+                }
+                withContext(Dispatchers.IO) { final.setLastModified(System.currentTimeMillis()) }
                 published = true
-                if (save) { pendingSave = prepared; pickerActive = false } else pendingOpen = prepared
-            } finally { withContext(NonCancellable + Dispatchers.IO) { part.delete(); if (!published) final.delete() } }
+                pendingOpen = OpenFile(androidx.core.content.FileProvider.getUriForFile(getApplication(),
+                    "${getApplication<Application>().packageName}.files", final, entry.name), entry.name, mime, entry, chooser, share)
+            } finally { withContext(NonCancellable + Dispatchers.IO) { part.delete(); if (!published && created) final.delete() } }
         }
     }
     fun savePrepared(uri: Uri?) {
         val file = pendingSave ?: return
         pendingSave = null; pickerActive = false
-        if (uri == null) { file.file.delete(); notice = "已取消保存"; return }
-        transfer = Transfer("正在保存到所选位置")
+        if (uri == null) { file.file?.delete(); notice = "已取消保存"; return }
+        val source = api
+        transfer = Transfer("${file.name} · 正在保存")
         transferJob = viewModelScope.launch {
             var complete = false
             try {
-                withContext(Dispatchers.IO) {
+                if (file.remote != null) {
+                    checkNotNull(source) { "请重新连接 NAS" }
+                    source.downloadTo(file.remote.path, {
+                        getApplication<Application>().contentResolver.openOutputStream(uri, "w") ?: throw IOException("无法写入所选位置")
+                    }) { done, total -> viewModelScope.launch { transfer = transfer?.copy(done = done, total = total) } }
+                } else withContext(Dispatchers.IO) {
                     val resolver = getApplication<Application>().contentResolver
-                    resolver.openOutputStream(uri, "w")?.use { output -> file.file.inputStream().use { input ->
+                    resolver.openOutputStream(uri, "w")?.use { output -> file.file!!.inputStream().use { input ->
                         val bytes = ByteArray(64 * 1024)
                         while (true) { currentCoroutineContext().ensureActive(); val n = input.read(bytes); if (n < 0) break; output.write(bytes, 0, n) }
                     } } ?: throw IOException("无法写入所选位置")
@@ -309,7 +363,7 @@ class NasViewModel(application: Application) : AndroidViewModel(application) {
             finally {
                 withContext(NonCancellable + Dispatchers.IO) {
                     if (!complete) runCatching { DocumentsContract.deleteDocument(getApplication<Application>().contentResolver, uri) }
-                    file.file.delete()
+                    file.file?.delete()
                 }
                 transfer = null; updateCacheSize()
             }
@@ -370,7 +424,11 @@ class NasViewModel(application: Application) : AndroidViewModel(application) {
 
     fun openPreview(entry: Entry) {
         if (!canSearch) { notice = "请先恢复 NAS 连接"; return }
+        recordSearch()
         if (entry.directory) { enterDirectory(entry); return }
+        if (entry.kind() in setOf(FileKind.MEDIA, FileKind.DOCUMENT, FileKind.ARCHIVE)) {
+            fileAction(entry, false, chooser = false); return
+        }
         val source = api ?: return
         closePreview(); preview = Preview(entry)
         previewJob = viewModelScope.launch {
@@ -382,7 +440,9 @@ class NasViewModel(application: Application) : AndroidViewModel(application) {
                     mime.startsWith("image/") -> {
                         val file = File.createTempFile("image-", ".tmp", getApplication<Application>().cacheDir)
                         try {
-                            source.download(entry.path, file, 64L * 1024 * 1024)
+                            source.download(entry.path, file, 64L * 1024 * 1024) { done, total -> viewModelScope.launch {
+                                if (preview?.entry == entry) preview = preview?.copy(done = done, total = total)
+                            } }
                             val bitmap = withContext(Dispatchers.IO) {
                                 val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }; BitmapFactory.decodeFile(file.path, bounds)
                                 require(bounds.outWidth > 0 && bounds.outHeight > 0) { "设备不支持此图片格式" }
@@ -390,7 +450,12 @@ class NasViewModel(application: Application) : AndroidViewModel(application) {
                                     inSampleSize = 1
                                     while (bounds.outWidth / inSampleSize > 2560 || bounds.outHeight / inSampleSize > 2560) inSampleSize *= 2
                                 }
-                                BitmapFactory.decodeFile(file.path, options) ?: throw IOException("无法解码图片")
+                                if (android.os.Build.VERSION.SDK_INT >= 28) {
+                                    android.graphics.ImageDecoder.decodeBitmap(android.graphics.ImageDecoder.createSource(file)) { decoder, imageInfo, _ ->
+                                        val ratio = minOf(1f, 2560f / maxOf(imageInfo.size.width, imageInfo.size.height))
+                                        decoder.setTargetSize((imageInfo.size.width * ratio).toInt().coerceAtLeast(1), (imageInfo.size.height * ratio).toInt().coerceAtLeast(1))
+                                    }
+                                } else BitmapFactory.decodeFile(file.path, options) ?: throw IOException("无法解码图片")
                             }
                             preview = preview?.copy(bitmap = bitmap, loading = false)
                         } finally { file.delete() }
@@ -406,37 +471,32 @@ class NasViewModel(application: Application) : AndroidViewModel(application) {
             catch (e: Exception) { handleError(e); preview = preview?.copy(loading = false, error = message(e)) }
         }
     }
-    fun loadPdf(page: Int = 0) {
-        val current = preview ?: return; val source = api ?: return
-        previewJob?.cancel(); preview = current.copy(loading = true, error = null)
-        previewJob = viewModelScope.launch {
-            var candidate: File? = null
+    fun moveImage(direction: Int) {
+        val current = preview ?: return
+        val source = api ?: return
+        if (movingImage || search.id.isEmpty()) return
+        val snapshot = search.id
+        movingImage = true
+        imageNavigation = viewModelScope.launch {
             try {
-                val file = current.pdf ?: File.createTempFile("pdf-", ".pdf", getApplication<Application>().cacheDir).also {
-                    candidate = it; source.download(current.entry.path, it, 128L * 1024 * 1024)
+                var index = current.entry.index + direction
+                while (index in 0 until search.total && snapshot == search.id) {
+                    val offset = index / PAGE_SIZE * PAGE_SIZE
+                    val rows = search.pages[offset] ?: source.page(snapshot, offset).rows
+                    val candidates = if (direction > 0) rows.filter { it.index >= index } else rows.filter { it.index <= index }.reversed()
+                    val next = candidates.firstOrNull { !it.directory && it.kind() == FileKind.IMAGE }
+                    if (next != null) { imageNavigation = null; openPreview(next); return@launch }
+                    index = if (direction > 0) offset + PAGE_SIZE else offset - 1
                 }
-                val rendered = withContext(Dispatchers.IO) {
-                    ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { descriptor ->
-                        PdfRenderer(descriptor).use { pdf ->
-                            val number = page.coerceIn(0, pdf.pageCount - 1)
-                            pdf.openPage(number).use { p ->
-                                val scale = minOf(2f, 2560f / maxOf(p.width, p.height))
-                                val bitmap = Bitmap.createBitmap((p.width * scale).toInt().coerceAtLeast(1), (p.height * scale).toInt().coerceAtLeast(1), Bitmap.Config.ARGB_8888)
-                                bitmap.eraseColor(android.graphics.Color.WHITE); p.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                                Triple(bitmap, number, pdf.pageCount)
-                            }
-                        }
-                    }
-                }
-                preview = preview?.copy(pdf = file, bitmap = rendered.first, page = rendered.second, pageCount = rendered.third, loading = false)
-                candidate = null
+                notice = if (direction > 0) "已是最后一张图片" else "已是第一张图片"
             } catch (e: CancellationException) { throw e }
-            catch (e: Exception) { handleError(e); preview = preview?.copy(loading = false, error = message(e)) }
-            finally { candidate?.delete() }
+            catch (e: Exception) { handleError(e); notice = message(e) }
+            finally { movingImage = false }
         }
     }
-    fun closePreview() { previewJob?.cancel(); preview?.pdf?.delete(); preview = null }
+    fun closePreview() { imageNavigation?.cancel(); previewJob?.cancel(); preview = null }
     fun updateCacheSize() { viewModelScope.launch { cacheBytes = withContext(Dispatchers.IO) {
+        LocalCopies(File(getApplication<Application>().cacheDir, "outgoing")).trim()
         File(getApplication<Application>().cacheDir, "outgoing").walkTopDown().filter { it.isFile }.sumOf { it.length() }
     } } }
     fun clearCache(silent: Boolean = false) {
@@ -449,7 +509,7 @@ class NasViewModel(application: Application) : AndroidViewModel(application) {
     private fun handleError(e: Exception) {
         if (e is CancellationException) throw e
         if (e is ApiException) {
-            if (e.status == 401) { needsLogin = true; online = false; store.forget(); exitSelection() }
+            if (e.status == 401) { RemoteFileProvider.clear(); needsLogin = true; online = false; store.forget(); exitSelection() }
             if (e.status == 400 && e.message?.contains("过期") == true) search = search.copy(error = e.message)
         } else if (e is TransportException) online = false
     }

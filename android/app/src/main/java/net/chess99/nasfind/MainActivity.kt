@@ -11,24 +11,19 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
-import android.widget.MediaController
-import android.widget.VideoView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -48,17 +43,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.buildAnnotatedString
@@ -71,8 +61,6 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.content.FileProvider
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
@@ -122,11 +110,19 @@ class MainActivity : ComponentActivity() {
     LaunchedEffect(vm.pendingOpen) {
         vm.pendingOpen?.let { prepared ->
             vm.pendingOpen = null
-            val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", prepared.file)
-            val intent = Intent(Intent.ACTION_VIEW).setDataAndType(uri, prepared.mime)
-                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION).apply { clipData = ClipData.newRawUri(prepared.name, uri) }
-            try { context.startActivity(Intent.createChooser(intent, "打开本地副本")) }
-            catch (_: ActivityNotFoundException) { vm.notice = "没有可打开此格式的应用，可选择保存到手机" }
+            val intent = if (prepared.share) Intent(Intent.ACTION_SEND).setType(prepared.mime).putExtra(Intent.EXTRA_STREAM, prepared.uri)
+                else Intent(Intent.ACTION_VIEW).setDataAndType(prepared.uri, prepared.mime)
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION).apply {
+                clipData = ClipData.newRawUri(prepared.name, prepared.uri)
+                putExtra(Intent.EXTRA_TITLE, prepared.name)
+                putExtra("title", prepared.name) // Supported by players such as VLC for content URI titles.
+            }
+            if (!prepared.share && intent.resolveActivity(context.packageManager) == null) {
+                vm.notice = "没有可打开此文件的应用"; fileMenu = prepared.entry; return@let
+            }
+            try { context.startActivity(if (prepared.chooser || prepared.share) Intent.createChooser(intent, if (prepared.share) "分享文件" else "打开方式") else intent) }
+            catch (_: ActivityNotFoundException) { vm.notice = "没有可打开此文件的应用"; fileMenu = prepared.entry }
+            catch (_: SecurityException) { vm.notice = "应用无法读取此文件，请选择其他应用"; fileMenu = prepared.entry }
         }
     }
     LaunchedEffect(vm.clipboardText) {
@@ -165,13 +161,6 @@ class MainActivity : ComponentActivity() {
     Scaffold(snackbarHost = { SnackbarHost(snackbar) }, bottomBar = {
         Column(Modifier.navigationBarsPadding()) {
             vm.transfer?.let { TransferBar(it, vm::cancelTransfer) }
-            vm.preview?.takeIf { it.pageCount > 0 }?.let { current ->
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = { vm.loadPdf(current.page - 1) }, enabled = current.page > 0 && !current.loading) { Text("上一页") }
-                    Text("${current.page + 1} / ${current.pageCount}")
-                    TextButton(onClick = { vm.loadPdf(current.page + 1) }, enabled = current.page + 1 < current.pageCount && !current.loading) { Text("下一页") }
-                }
-            }
             if (vm.selectionMode && vm.preview == null && !vm.settings && !vm.needsLogin) {
                 val enabled = vm.search.ready && vm.selection.count(vm.search.total) > 0 && !vm.busy && vm.canSearch
                 Surface(shadowElevation = 3.dp) {
@@ -212,34 +201,13 @@ class MainActivity : ComponentActivity() {
             confirmButton = { TextButton(onClick = vm::connectImported, enabled = !vm.connecting, modifier = Modifier.testTag("confirm-import")) { Text(if (vm.connecting) "正在连接…" else "连接并保存") } },
             dismissButton = { TextButton(onClick = vm::dismissConnectionImport, enabled = !vm.connecting, modifier = Modifier.testTag("cancel-import")) { Text("取消") } })
     }
-    if (filtersOpen) FilterSheet(vm.filters, { filtersOpen = false }) { value -> vm.applyFilters(value); filtersOpen = false }
-    fileMenu?.let { entry ->
-        ModalBottomSheet(onDismissRequest = { fileMenu = null }) {
-            Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 24.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    FileGlyph(entry); Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) { Text(entry.name, fontWeight = FontWeight.SemiBold, fontSize = 18.sp); SelectionContainer { Text(entry.path, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
-                }
-                Spacer(Modifier.height(20.dp))
-                if (!entry.directory) {
-                    ActionRow(Icons.AutoMirrored.Outlined.OpenInNew, "用其他应用打开", "下载临时副本后打开") { fileMenu = null; vm.fileAction(entry, false) }
-                    ActionRow(Icons.Outlined.FileDownload, "保存到手机", "选择保存位置", "save-file") { fileMenu = null; vm.fileAction(entry, true) }
-                }
-                ActionRow(Icons.Outlined.ContentCopy, "复制相对路径") {
-                    fileMenu = null
-                    try { vm.clipboardText = textPath(entry.path).removeSuffix("\r\n") }
-                    catch (e: IllegalArgumentException) { vm.notice = e.message }
-                }
-                ActionRow(Icons.Outlined.Search, if (entry.directory) "在此目录中搜索" else "在所在目录中搜索") {
-                    fileMenu = null; vm.closePreview(); vm.enterDirectory(entry, preserve = !entry.directory)
-                }
-                HorizontalDivider(Modifier.padding(vertical = 12.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Outlined.Info, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(Modifier.width(8.dp)); Text("本地副本的修改不会同步到 NAS", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-        }
+    if (filtersOpen) FilterSheet(vm, vm.filters, { filtersOpen = false }) { value -> vm.applyFilters(value); filtersOpen = false }
+    fileMenu?.let { entry -> FileActionsSheet(vm, entry) { fileMenu = null } }
+    vm.fileFailure?.let { failure ->
+        AlertDialog(onDismissRequest = { vm.fileFailure = null }, title = { Text(if (failure.save) "无法保存文件" else "无法打开文件") },
+            text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) { Text(failure.entry.name, maxLines = 2, overflow = TextOverflow.Ellipsis); Text(failure.message) } },
+            confirmButton = { TextButton(onClick = { vm.fileAction(failure.entry, failure.save, failure.chooser, failure.share) }) { Text("重试") } },
+            dismissButton = { TextButton(onClick = { vm.fileFailure = null; fileMenu = failure.entry }) { Text("更多操作") } })
     }
     if (exportOpen) AlertDialog(onDismissRequest = { exportOpen = false }, title = { Text("导出路径清单") },
         text = { Text("TXT 每行一个相对路径；CSV 可完整保留含换行等特殊字符的名称。清单不包含文件内容。") },
@@ -299,24 +267,19 @@ class MainActivity : ComponentActivity() {
     val keyboard = LocalSoftwareKeyboardController.current
     val focus = LocalFocusManager.current
     val requester = remember { FocusRequester() }
-    LaunchedEffect(vm.query) { if (input.text != vm.query) input = TextFieldValue(vm.query, TextRange(vm.query.length)) }
+    LaunchedEffect(vm.query, vm.editing) { if (!vm.editing && input.text != vm.query) input = TextFieldValue(vm.query, TextRange(vm.query.length)) }
     Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             if (vm.selectionMode) {
                 IconButton(onClick = vm::exitSelection) { Icon(Icons.Outlined.Close, "取消选择") }
                 Text(if (vm.selection.all && !vm.search.complete) "已选全部 · 正在统计" else "已选 ${vm.selection.count(vm.search.total)} 项", Modifier.weight(1f), fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
                 TextButton(onClick = vm::selectAll, modifier = Modifier.testTag("select-all")) { Text("全选") }
             } else {
-                Column(Modifier.weight(1f).padding(start = 8.dp)) {
-                    FlowRow(verticalArrangement = Arrangement.Center, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text(vm.name, fontWeight = FontWeight.SemiBold, fontSize = 20.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Row(Modifier.heightIn(min = 28.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Icon(if (vm.canSearch && vm.status.error == null && !vm.status.dirty && !vm.status.scanning) Icons.Outlined.CheckCircle else Icons.Outlined.Info,
-                                null, Modifier.size(14.dp), tint = if (vm.canSearch) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
-                            Spacer(Modifier.width(5.dp)); Text(vm.stateLabel, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
-                }
+                if (vm.browsing) IconButton(onClick = vm::backSearch) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "返回") }
+                Text(if (vm.inFolder) vm.filters.scope.substringAfterLast('/').ifEmpty { "全部文件" } else vm.name,
+                    Modifier.weight(1f).padding(start = if (vm.browsing) 0.dp else 8.dp), fontWeight = FontWeight.SemiBold,
+                    fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (!vm.canSearch || vm.status.error != null) Icon(Icons.Outlined.Info, vm.stateLabel, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.error)
                 IconButton(onClick = { vm.settings = true; vm.updateCacheSize() }, modifier = Modifier.testTag("settings-button")) { Icon(Icons.Outlined.Settings, "设置") }
             }
         }
@@ -324,9 +287,9 @@ class MainActivity : ComponentActivity() {
             Text(listOf(vm.query.ifEmpty { "全部文件" }, vm.filters.summary()).joinToString(" · "), Modifier.padding(horizontal = 20.dp, vertical = 12.dp).fillMaxWidth()
                 .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp)).padding(14.dp), maxLines = 4, overflow = TextOverflow.Ellipsis)
         } else {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(input, { value -> if (value.text.length <= 300) { input = value; vm.input(value.text, value.composition != null) } },
-                    Modifier.weight(1f).focusRequester(requester).testTag("search-field"), placeholder = { Text("搜索文件名") }, singleLine = true,
+                    Modifier.weight(1f).focusRequester(requester).testTag("search-field"), placeholder = { Text(if (vm.filters.scope.isNotEmpty()) "搜索此文件夹" else "搜索文件名") }, singleLine = true,
                     shape = RoundedCornerShape(16.dp), colors = OutlinedTextFieldDefaults.colors(unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant), leadingIcon = { Icon(Icons.Outlined.Search, null) },
                     trailingIcon = { if (input.text.isNotEmpty()) IconButton(onClick = { input = TextFieldValue(); vm.submit("") }) { Icon(Icons.Outlined.Close, "清除关键词") } },
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
@@ -361,23 +324,30 @@ class MainActivity : ComponentActivity() {
                     }
                     if (vm.history.size > 5) item { TextButton(onClick = { allHistory = !allHistory }) { Text(if (allHistory) "收起" else "查看全部") } }
                 } else item { Text("输入文件名开始查找", Modifier.padding(vertical = 20.dp), color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                item { Spacer(Modifier.height(16.dp)); ActionRow(Icons.Outlined.FolderOpen, "浏览全部文件", tag = "browse-all", trailing = true) { vm.browseAll(); focus.clearFocus(); keyboard?.hide() } }
+                item { Spacer(Modifier.height(16.dp)); ActionRow(Icons.Outlined.FolderOpen, "浏览文件夹", tag = "browse-all", trailing = true) { vm.browseAll(); focus.clearFocus(); keyboard?.hide() } }
             }
         } else {
+            if (vm.inFolder && !vm.selectionMode) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = vm::parentFolder, enabled = vm.filters.scope.isNotEmpty()) { Icon(Icons.Outlined.ArrowUpward, "上一级") }
+                    Box(Modifier.weight(1f)) { PathText(vm.filters.scope.ifEmpty { "根目录" }) }
+                    TextButton(onClick = { vm.searchFolder(); requester.requestFocus(); keyboard?.show() }) { Text("搜索此处") }
+                }
+            }
             if (!vm.selectionMode) {
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     categories.forEach { (key, label) -> FilterChip(selected = vm.filters.category == key, onClick = { vm.applyFilters(vm.filters.copy(category = key)); focus.clearFocus(); keyboard?.hide() }, label = { Text(label) }, modifier = Modifier.testTag("category-$key"), border = null, colors = categoryColors()) }
                 }
-                if (vm.filters.scope.isNotEmpty() || vm.filters.extension.isNotEmpty() || vm.filters.matchPath) {
+                if ((vm.filters.scope.isNotEmpty() && !vm.inFolder) || vm.filters.extension.isNotEmpty() || vm.filters.matchPath) {
                     FlowRow(Modifier.padding(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        if (vm.filters.scope.isNotEmpty()) InputChip(selected = true, onClick = { vm.applyFilters(vm.filters.copy(scope = "")) }, label = { Text("目录：${vm.filters.scope}", maxLines = 2) }, trailingIcon = { Icon(Icons.Outlined.Close, "移除目录范围", Modifier.size(16.dp)) })
+                        if (vm.filters.scope.isNotEmpty() && !vm.inFolder) InputChip(selected = true, onClick = { vm.applyFilters(vm.filters.copy(scope = "")) }, label = { Text("目录：${vm.filters.scope}", maxLines = 2) }, trailingIcon = { Icon(Icons.Outlined.Close, "移除目录范围", Modifier.size(16.dp)) })
                         if (vm.filters.extension.isNotEmpty()) InputChip(selected = true, onClick = { vm.applyFilters(vm.filters.copy(extension = "")) }, label = { Text(".${vm.filters.extension}") }, trailingIcon = { Icon(Icons.Outlined.Close, "移除扩展名", Modifier.size(16.dp)) })
                         if (vm.filters.matchPath) InputChip(selected = true, onClick = { vm.applyFilters(vm.filters.copy(matchPath = false)) }, label = { Text("匹配路径") }, trailingIcon = { Icon(Icons.Outlined.Close, "关闭路径匹配", Modifier.size(16.dp)) })
                     }
                 }
             }
-            Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(if (vm.editing) "正在输入 · 上次结果" else if (vm.search.complete) "${vm.search.total} 个结果 · 含子目录" else "已找到 ${vm.search.total} 项 · 正在统计", Modifier.weight(1f), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(Modifier.fillMaxWidth().heightIn(min = 40.dp).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(if (vm.editing) "正在输入 · 上次结果" else if (vm.search.complete) "${String.format(Locale.getDefault(), "%,d", vm.search.total)} 项" else "已找到 ${vm.search.total} 项 · 正在统计", Modifier.weight(1f), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (!vm.selectionMode) TextButton(onClick = { keyboard?.hide(); vm.beginSelection() }, enabled = vm.search.total > 0 && vm.canOperateResults, modifier = Modifier.testTag("select-button")) { Text("选择") }
             }
             vm.search.error?.let { error ->
@@ -408,8 +378,8 @@ class MainActivity : ComponentActivity() {
                     if (!vm.search.complete && vm.search.error == null) CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 2.dp)
                     else {
                         Icon(Icons.Outlined.SearchOff, null, Modifier.size(40.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Spacer(Modifier.height(12.dp)); Text("没有匹配结果", fontWeight = FontWeight.Medium)
-                        Text("可缩短关键词，或开启路径匹配", Modifier.padding(top = 8.dp), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+                        Spacer(Modifier.height(12.dp)); Text(if (vm.inFolder && vm.filters.category == "all" && vm.filters.extension.isEmpty()) "文件夹为空" else "没有匹配结果", fontWeight = FontWeight.Medium)
+                        if (!vm.inFolder) Text("可缩短关键词，或开启路径匹配", Modifier.padding(top = 8.dp), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
                         if (vm.filters.count > 0) TextButton(onClick = { vm.applyFilters(Filters()) }) { Text("清除筛选") }
                     }
                 }
@@ -423,7 +393,9 @@ class MainActivity : ComponentActivity() {
                         if (offset in vm.search.pageErrors) TextButton(onClick = { vm.loadPage(offset, true) }) { Text("重试") }
                     }
                 } else FileRow(entry, if (vm.editing) "" else vm.query, vm.selectionMode, vm.selection.contains(index), vm.canOperateResults,
-                    onClick = { if (vm.selectionMode) vm.choose(entry) else vm.openPreview(entry) },
+                    onClick = { if (vm.selectionMode) vm.choose(entry) else {
+                        if (entry.kind() in setOf(FileKind.PROGRAM, FileKind.OTHER) && !entry.directory) showActions(entry) else vm.openPreview(entry)
+                    } },
                     onLongClick = { vm.choose(entry) }, onMore = { showActions(entry) })
             }
         }
@@ -455,21 +427,20 @@ class MainActivity : ComponentActivity() {
                 PathText(entry.parent.ifEmpty { "根目录" })
             }
             if (!selecting) {
-                if (entry.directory) Icon(Icons.Outlined.ChevronRight, null, Modifier.padding(12.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                else IconButton(onClick = onMore, enabled = enabled, modifier = Modifier.testTag("more-${entry.index}")) { Icon(Icons.Outlined.MoreVert, "更多文件操作") }
+                IconButton(onClick = onMore, enabled = enabled, modifier = Modifier.testTag("more-${entry.index}")) { Icon(Icons.Outlined.MoreVert, "更多文件操作") }
             }
         }
         HorizontalDivider(Modifier.padding(start = 70.dp, end = 20.dp), color = MaterialTheme.colorScheme.outlineVariant)
     }
 }
 
-@Composable private fun FileGlyph(entry: Entry) {
+@Composable internal fun FileGlyph(entry: Entry) {
     val (icon, color) = when {
         entry.directory -> Icons.Outlined.Folder to Color(0xFF9D6A15)
         entry.extension == "pdf" -> Icons.Outlined.PictureAsPdf to Color(0xFFB34757)
-        entry.extension in setOf("jpg", "jpeg", "png", "webp", "gif", "heic") -> Icons.Outlined.Image to Color(0xFF94701C)
-        entry.extension in setOf("mp4", "mkv", "mov", "webm") -> Icons.Outlined.Videocam to Color(0xFF7954AB)
-        entry.extension in setOf("mp3", "flac", "wav", "m4a") -> Icons.Outlined.AudioFile to Color(0xFF7954AB)
+        entry.extension in imageExtensions -> Icons.Outlined.Image to Color(0xFF94701C)
+        entry.extension in videoExtensions -> Icons.Outlined.Videocam to Color(0xFF7954AB)
+        entry.extension in audioExtensions -> Icons.Outlined.AudioFile to Color(0xFF7954AB)
         entry.extension in setOf("xls", "xlsx", "csv") -> Icons.Outlined.TableChart to Color(0xFF26745B)
         else -> Icons.AutoMirrored.Outlined.InsertDriveFile to Color(0xFF4A7499)
     }
@@ -478,8 +449,10 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@Composable private fun FilterSheet(initial: Filters, close: () -> Unit, apply: (Filters) -> Unit) {
+@Composable private fun FilterSheet(vm: NasViewModel, initial: Filters, close: () -> Unit, apply: (Filters) -> Unit) {
     var draft by remember { mutableStateOf(initial) }
+    var pickingFolder by remember { mutableStateOf(false) }
+    var manualScope by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     ModalBottomSheet(onDismissRequest = close, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(Modifier.fillMaxWidth().imePadding().padding(horizontal = 20.dp)) {
@@ -494,8 +467,10 @@ class MainActivity : ComponentActivity() {
                         onClick = { draft = draft.copy(category = key, extension = if (key == "folder") "" else draft.extension) },
                         label = { Text(label) }, modifier = Modifier.testTag("filter-type-$key"), border = null, colors = categoryColors()) }
                 }
-                OutlinedTextField(draft.scope, { draft = draft.copy(scope = it) }, Modifier.fillMaxWidth().testTag("scope-field"),
-                    label = { Text("搜索范围") }, placeholder = { Text("全部目录") }, supportingText = { Text("填写 NAS 内的相对目录，包含子目录") }, singleLine = true)
+                if (vm.status.directoryBrowse) ActionRow(Icons.Outlined.FolderOpen, "搜索范围", draft.scope.ifEmpty { "全部文件夹" }, trailing = true) { pickingFolder = true }
+                if (vm.status.directoryBrowse) TextButton(onClick = { manualScope = !manualScope }) { Text(if (manualScope) "收起路径输入" else "输入路径") }
+                if (manualScope || !vm.status.directoryBrowse) OutlinedTextField(draft.scope, { draft = draft.copy(scope = it, recursive = true) }, Modifier.fillMaxWidth().testTag("scope-field"),
+                    label = { Text("搜索范围") }, placeholder = { Text("全部目录") }, supportingText = { Text("也可直接填写路径") }, singleLine = true)
                 OutlinedTextField(draft.extension, { draft = draft.copy(extension = it) }, Modifier.fillMaxWidth().testTag("extension-field"),
                     label = { Text("扩展名") }, placeholder = { Text("例如 pdf") }, singleLine = true, enabled = draft.category != "folder")
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -511,83 +486,10 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-}
-
-@Composable private fun PreviewPage(vm: NasViewModel, showActions: (Entry) -> Unit) {
-    val current = vm.preview ?: return
-    Column(Modifier.fillMaxSize().testTag("preview-page")) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = vm::closePreview) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "返回搜索结果") }
-            Column(Modifier.weight(1f)) {
-                Text(current.entry.name, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                PathText(current.entry.parent)
-            }
-            IconButton(onClick = { vm.fileAction(current.entry, true) }, enabled = !vm.busy) { Icon(Icons.Outlined.FileDownload, "保存到手机") }
-            IconButton(onClick = { showActions(current.entry) }) { Icon(Icons.Outlined.MoreVert, "更多文件操作") }
-        }
-        Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-            when {
-                current.loading -> CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 2.dp)
-                current.error != null -> Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(current.error, color = MaterialTheme.colorScheme.error)
-                    TextButton(onClick = { vm.openPreview(current.entry) }) { Text("重试") }
-                    TextButton(onClick = { vm.fileAction(current.entry, false) }) { Text("用其他应用打开") }
-                }
-                current.bitmap != null -> {
-                    var scale by remember(current.bitmap) { mutableFloatStateOf(1f) }
-                    var offset by remember(current.bitmap) { mutableStateOf(Offset.Zero) }
-                    Image(current.bitmap.asImageBitmap(), current.entry.name, Modifier.fillMaxSize().padding(8.dp).pointerInput(current.bitmap) {
-                        detectTransformGestures { _, pan, zoom, _ ->
-                            scale = (scale * zoom).coerceIn(1f, 5f)
-                            val limitX = size.width * (scale - 1f) / 2f; val limitY = size.height * (scale - 1f) / 2f
-                            offset = Offset((offset.x + pan.x).coerceIn(-limitX, limitX), (offset.y + pan.y).coerceIn(-limitY, limitY))
-                        }
-                    }.graphicsLayer { scaleX = scale; scaleY = scale; translationX = offset.x; translationY = offset.y })
-                }
-                current.text != null -> SelectionContainer { Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp)) {
-                    if (current.truncated) Text("内容较长，仅显示前 64 KiB；可保存完整文件。", color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(bottom = 12.dp))
-                    Text(current.text, fontSize = 15.sp, modifier = Modifier.testTag("preview-text"))
-                } }
-                current.mime == "application/pdf" -> Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(Icons.Outlined.PictureAsPdf, null, Modifier.size(40.dp)); Spacer(Modifier.height(16.dp))
-                    Text("预览 PDF 需要加载完整文件")
-                    Button(onClick = { vm.loadPdf() }) { Text("加载 PDF") }
-                }
-                current.mime.startsWith("video/") || current.mime.startsWith("audio/") -> MediaPreview(vm, current)
-                else -> Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    FileGlyph(current.entry); Spacer(Modifier.height(16.dp)); Text("此格式暂不支持预览")
-                    TextButton(onClick = { vm.fileAction(current.entry, false) }) { Text("用其他应用打开") }
-                    TextButton(onClick = { vm.fileAction(current.entry, true) }) { Text("保存到手机") }
-                }
-            }
-        }
+    if (pickingFolder) FolderPicker(vm, draft.scope, { pickingFolder = false }) { path ->
+        draft = draft.copy(scope = path, recursive = true); pickingFolder = false
     }
-}
 
-@Composable private fun MediaPreview(vm: NasViewModel, preview: Preview) {
-    var play by remember(preview.entry.path) { mutableStateOf(false) }
-    var error by remember { mutableStateOf(false) }
-    var player by remember { mutableStateOf<VideoView?>(null) }
-    DisposableEffect(Unit) { onDispose { player?.stopPlayback() } }
-    val lifecycle = LocalLifecycleOwner.current
-    DisposableEffect(lifecycle) {
-        val observer = androidx.lifecycle.LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_STOP) player?.pause() }
-        lifecycle.lifecycle.addObserver(observer); onDispose { lifecycle.lifecycle.removeObserver(observer) }
-    }
-    if (!play || error) Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(if (error) "设备无法播放此格式" else "按需加载并播放")
-        if (error) TextButton(onClick = { vm.fileAction(preview.entry, false) }) { Text("用其他应用打开") }
-        else Button(onClick = { play = true }) { Icon(Icons.Outlined.PlayArrow, null); Text("播放") }
-    } else AndroidView(factory = { context ->
-        VideoView(context).apply {
-            player = this
-            setMediaController(MediaController(context).also { it.setAnchorView(this) })
-            setOnErrorListener { _, _, _ -> error = true; true }
-            setOnPreparedListener { start() }
-            val api = vm.api!!
-            setVideoURI(android.net.Uri.parse(api.fileUrl(preview.entry.path)), mapOf("Cookie" to "nasfind_session=${api.session}"))
-        }
-    }, modifier = Modifier.fillMaxWidth().heightIn(min = 200.dp))
 }
 
 @Composable private fun SettingsPage(vm: NasViewModel, onImport: () -> Unit) {
@@ -639,7 +541,7 @@ class MainActivity : ComponentActivity() {
     }, confirmButton = { TextButton(onClick = { license = false }) { Text("关闭") } })
 }
 
-@Composable private fun ActionRow(icon: ImageVector, title: String, subtitle: String? = null, tag: String = title, trailing: Boolean = false, onClick: () -> Unit) {
+@Composable internal fun ActionRow(icon: ImageVector, title: String, subtitle: String? = null, tag: String = title, trailing: Boolean = false, onClick: () -> Unit) {
     Row(Modifier.fillMaxWidth().heightIn(min = if (subtitle == null) 56.dp else 68.dp).combinedClickable(onClick = onClick)
         .testTag(tag), verticalAlignment = Alignment.CenterVertically) {
         Icon(icon, null, Modifier.size(24.dp)); Spacer(Modifier.width(16.dp))
@@ -677,7 +579,7 @@ fun formatBytes(bytes: Long): String = when {
     containerColor = MaterialTheme.colorScheme.surfaceVariant, labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
     selectedContainerColor = MaterialTheme.colorScheme.primary, selectedLabelColor = MaterialTheme.colorScheme.onPrimary)
 
-@Composable private fun PathText(path: String) {
+@Composable internal fun PathText(path: String) {
     val measurer = androidx.compose.ui.text.rememberTextMeasurer()
     val style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp)
     BoxWithConstraints(Modifier.fillMaxWidth()) {
