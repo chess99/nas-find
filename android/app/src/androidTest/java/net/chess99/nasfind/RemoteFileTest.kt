@@ -42,10 +42,33 @@ class RemoteFileTest {
                 assertEquals(100, Os.pread(fd.fileDescriptor, sample, 0, 100, 10))
                 assertArrayEquals(bytes.copyOfRange(10, 110), sample)
                 assertTrue(server.requestCount <= 3)
+                val across = ByteArray(300000); val offset = 256 * 1024 - 7
+                assertEquals(across.size, Os.pread(fd.fileDescriptor, across, 0, across.size, offset.toLong()))
+                assertArrayEquals(bytes.copyOfRange(offset, offset + across.size), across)
             }
             assertThrows(java.io.FileNotFoundException::class.java) { context.contentResolver.openFileDescriptor(uri, "w") }
             RemoteFileProvider.clear()
             assertThrows(java.io.FileNotFoundException::class.java) { context.contentResolver.openFileDescriptor(uri, "r") }
+        }
+    }
+    @Test fun savedGrantSurvivesStoreRecreationButNotSessionRevocation() {
+        val store = ConnectionStore(context)
+        val previousServer = store.server; val previousName = store.name; val previousToken = store.token()
+        try {
+            store.saveConnection("http://127.0.0.1:18999", "test", "persistent-test-token")
+            val uri = RemoteFileProvider.register(context, RemoteFileProvider.Grant(NasApi(store.server, store.token()), "folder/a.mp4", "a.mp4", "video/mp4", 123, 1))
+            val token = uri.pathSegments[0]
+            val restored = RemoteGrantStore(context).load(token)
+            assertEquals("folder/a.mp4", restored!!.path)
+            assertEquals("persistent-test-token", restored.api.session)
+            val record = java.io.File(context.filesDir, "remote-grants/$token.json").readText()
+            assertFalse(record.contains("persistent-test-token"))
+            store.forget()
+            assertNull(RemoteGrantStore(context).load(token))
+            assertNull(RemoteGrantStore(context).load("../elsewhere"))
+        } finally {
+            if (previousToken.isNotEmpty()) store.saveConnection(previousServer, previousName, previousToken)
+            else { store.forget(); store.server = previousServer; store.name = previousName }
         }
     }
     @Test fun androidPlayerPreparesAndSeeksThroughFileGrant() {

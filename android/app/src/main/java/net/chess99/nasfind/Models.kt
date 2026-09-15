@@ -54,11 +54,7 @@ fun Entry.kind(mime: String = ""): FileKind = when {
     extension in archiveExtensions -> FileKind.ARCHIVE
     else -> FileKind.OTHER
 }
-fun Entry.mime(fallback: String): String = if (fallback != "application/octet-stream" && fallback.isNotBlank()) fallback else when (extension) {
-    "flv" -> "video/x-flv"; "avi" -> "video/x-msvideo"; "mkv" -> "video/x-matroska"; "mp4", "m4v" -> "video/mp4"
-    "mp3" -> "audio/mpeg"; "m4a" -> "audio/mp4"; "pdf" -> "application/pdf"
-    else -> fallback.ifBlank { "application/octet-stream" }
-}
+fun Entry.mime(fallback: String) = FileMime.resolve(name, fallback)
 
 data class IndexStatus(val available: Boolean = false, val scanning: Boolean = false, val dirty: Boolean = false,
     val error: String? = null, val entries: Long = 0, val directoryBrowse: Boolean = false,

@@ -29,7 +29,7 @@ data class Transfer(val label: String, val done: Long = 0, val total: Long = -1,
 data class PreparedFile(val file: File?, val name: String, val mime: String, val remote: Entry? = null)
 data class SavedDocument(val uri: Uri, val mime: String)
 data class OpenFile(val uri: Uri, val name: String, val mime: String, val entry: Entry, val chooser: Boolean = false, val share: Boolean = false)
-data class FileFailure(val entry: Entry, val message: String, val save: Boolean, val chooser: Boolean, val share: Boolean)
+data class FileFailure(val entry: Entry, val message: String, val save: Boolean, val chooser: Boolean, val share: Boolean, val localCopy: Boolean = false, val related: Entry? = null)
 data class Preview(val entry: Entry, val mime: String = "", val loading: Boolean = true, val error: String? = null,
     val text: String? = null, val truncated: Boolean = false, val bitmap: Bitmap? = null,
     val done: Long = 0, val total: Long = -1)
@@ -286,27 +286,34 @@ class NasViewModel(application: Application) : AndroidViewModel(application) {
         transferJob = viewModelScope.launch {
             try { operation() }
             catch (e: CancellationException) { notice = "已取消，未保存文件"; throw e }
-            catch (e: Exception) { handleError(e); if (failed != null) failed(message(e)) else notice = message(e) }
+            catch (e: Exception) { handleError(e); if (failed != null && !needsLogin) failed(message(e)) else notice = message(e) }
             finally { transfer = null; updateCacheSize() }
         }
     }
     fun cancelTransfer() { transferJob?.cancel() }
-    fun fileAction(entry: Entry, save: Boolean, chooser: Boolean = true, share: Boolean = false) {
+    fun fileAction(entry: Entry, save: Boolean, chooser: Boolean = true, share: Boolean = false, localCopy: Boolean = false) {
         val source = api ?: return
         recordSearch()
         fileFailure = null
-        startTransfer("${entry.name} · 正在连接", { fileFailure = FileFailure(entry, it, save, chooser, share) }) {
+        startTransfer("${entry.name} · 正在连接", { fileFailure = FileFailure(entry, it, save, chooser, share, localCopy) }) {
             var final = outgoing(entry.name); var part = File(final.path + ".part")
             var published = false
             var created = false
             try {
                 val info = source.json("/api/info", mapOf("path" to entry.path))
                 val mime = entry.mime(info.optString("mime", "application/octet-stream"))
+                if (!save && !share && entry.name.startsWith("._") && info.optLong("size") >= 4 && FileMime.isAppleDouble(source.prefix(entry.path))) {
+                    val name = entry.name.removePrefix("._")
+                    fileFailure = FileFailure(entry, "这是 macOS 的附属信息文件，不是音频或视频内容。", false, chooser, false, localCopy,
+                        entry.copy(name = name, path = if (entry.parent.isEmpty()) name else "${entry.parent}/$name"))
+                    return@startTransfer
+                }
+
                 if (save) {
                     pendingSave = PreparedFile(null, entry.name, mime, entry); pickerActive = false
                     return@startTransfer
                 }
-                if (!save && !share && entry.kind(mime) == FileKind.MEDIA) {
+                if (!save && !share && !localCopy && entry.kind(mime) == FileKind.MEDIA) {
                     val size = info.getLong("size")
                     require(size > 0) { "文件为空" }
                     source.probeFile(entry.path, size)

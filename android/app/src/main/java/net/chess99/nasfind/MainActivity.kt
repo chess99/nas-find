@@ -43,6 +43,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -88,7 +89,7 @@ class MainActivity : ComponentActivity() {
     MaterialTheme(colorScheme = colors, content = content)
 }
 
-@Composable fun NasApp(vm: NasViewModel = viewModel()) {
+@Composable fun NasApp(vm: NasViewModel = viewModel(), pickRequest: FilePickRequest? = null, onPicked: (OpenFile) -> Unit = {}) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current
     val snackbar = remember { SnackbarHostState() }
@@ -110,6 +111,11 @@ class MainActivity : ComponentActivity() {
     LaunchedEffect(vm.pendingOpen) {
         vm.pendingOpen?.let { prepared ->
             vm.pendingOpen = null
+            if (pickRequest != null) {
+                if (pickRequest.accepts(prepared.mime)) onPicked(prepared)
+                else vm.notice = "此文件类型不符合要求，请选择其他文件"
+                return@let
+            }
             val intent = if (prepared.share) Intent(Intent.ACTION_SEND).setType(prepared.mime).putExtra(Intent.EXTRA_STREAM, prepared.uri)
                 else Intent(Intent.ACTION_VIEW).setDataAndType(prepared.uri, prepared.mime)
             intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION).apply {
@@ -182,7 +188,7 @@ class MainActivity : ComponentActivity() {
                 vm.needsLogin -> ConnectionPage(vm, onImport = { importOpen = true })
                 vm.preview != null -> PreviewPage(vm) { fileMenu = it }
                 vm.settings -> SettingsPage(vm, onImport = { importOpen = true })
-                else -> SearchPage(vm, { filtersOpen = true }, { fileMenu = it })
+                else -> SearchPage(vm, { filtersOpen = true }, { fileMenu = it }, pickRequest)
             }
         }
     }
@@ -206,8 +212,8 @@ class MainActivity : ComponentActivity() {
     vm.fileFailure?.let { failure ->
         AlertDialog(onDismissRequest = { vm.fileFailure = null }, title = { Text(if (failure.save) "无法保存文件" else "无法打开文件") },
             text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) { Text(failure.entry.name, maxLines = 2, overflow = TextOverflow.Ellipsis); Text(failure.message) } },
-            confirmButton = { TextButton(onClick = { vm.fileAction(failure.entry, failure.save, failure.chooser, failure.share) }) { Text("重试") } },
-            dismissButton = { TextButton(onClick = { vm.fileFailure = null; fileMenu = failure.entry }) { Text("更多操作") } })
+            confirmButton = { TextButton(onClick = { vm.fileAction(failure.related ?: failure.entry, failure.save, failure.chooser, failure.share, failure.localCopy) }) { Text(if (failure.related != null) "打开对应文件" else "重试") } },
+            dismissButton = { TextButton(onClick = { vm.fileFailure = null; if (pickRequest == null) fileMenu = failure.entry }) { Text(if (pickRequest == null) "更多操作" else "取消") } })
     }
     if (exportOpen) AlertDialog(onDismissRequest = { exportOpen = false }, title = { Text("导出路径清单") },
         text = { Text("TXT 每行一个相对路径；CSV 可完整保留含换行等特殊字符的名称。清单不包含文件内容。") },
@@ -261,7 +267,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@Composable private fun SearchPage(vm: NasViewModel, showFilters: () -> Unit, showActions: (Entry) -> Unit) {
+@Composable private fun SearchPage(vm: NasViewModel, showFilters: () -> Unit, showActions: (Entry) -> Unit, pickRequest: FilePickRequest?) {
     var input by remember { mutableStateOf(TextFieldValue(vm.query)) }
     var allHistory by rememberSaveable { mutableStateOf(false) }
     val keyboard = LocalSoftwareKeyboardController.current
@@ -276,7 +282,7 @@ class MainActivity : ComponentActivity() {
                 TextButton(onClick = vm::selectAll, modifier = Modifier.testTag("select-all")) { Text("全选") }
             } else {
                 if (vm.browsing) IconButton(onClick = vm::backSearch) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "返回") }
-                Text(if (vm.inFolder) vm.filters.scope.substringAfterLast('/').ifEmpty { "全部文件" } else vm.name,
+                Text(if (pickRequest != null && !vm.inFolder) pickRequest.title else if (vm.inFolder) vm.filters.scope.substringAfterLast('/').ifEmpty { "全部文件" } else vm.name,
                     Modifier.weight(1f).padding(start = if (vm.browsing) 0.dp else 8.dp), fontWeight = FontWeight.SemiBold,
                     fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 if (!vm.canSearch || vm.status.error != null) Icon(Icons.Outlined.Info, vm.stateLabel, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.error)
@@ -348,7 +354,7 @@ class MainActivity : ComponentActivity() {
             }
             Row(Modifier.fillMaxWidth().heightIn(min = 40.dp).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(if (vm.editing) "正在输入 · 上次结果" else if (vm.search.complete) "${String.format(Locale.getDefault(), "%,d", vm.search.total)} 项" else "已找到 ${vm.search.total} 项 · 正在统计", Modifier.weight(1f), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                if (!vm.selectionMode) TextButton(onClick = { keyboard?.hide(); vm.beginSelection() }, enabled = vm.search.total > 0 && vm.canOperateResults, modifier = Modifier.testTag("select-button")) { Text("选择") }
+                if (!vm.selectionMode && pickRequest == null) TextButton(onClick = { keyboard?.hide(); vm.beginSelection() }, enabled = vm.search.total > 0 && vm.canOperateResults, modifier = Modifier.testTag("select-button")) { Text("选择") }
             }
             vm.search.error?.let { error ->
                 Column(Modifier.padding(horizontal = 20.dp)) {
@@ -356,12 +362,12 @@ class MainActivity : ComponentActivity() {
                     TextButton(onClick = { vm.submit() }) { Text("重新搜索") }
                 }
             }
-            Results(vm, showActions, Modifier.weight(1f))
+            Results(vm, showActions, Modifier.weight(1f), pickRequest)
         }
     }
 }
 
-@Composable private fun Results(vm: NasViewModel, showActions: (Entry) -> Unit, modifier: Modifier) {
+@Composable private fun Results(vm: NasViewModel, showActions: (Entry) -> Unit, modifier: Modifier, pickRequest: FilePickRequest?) {
     val list = remember(vm.search.id) { androidx.compose.foundation.lazy.LazyListState(vm.scroll.first, vm.scroll.second) }
     LaunchedEffect(list, vm.search.id, vm.search.total) {
         snapshotFlow { list.layoutInfo.visibleItemsInfo.map { it.index } }.collect { visible ->
@@ -392,11 +398,13 @@ class MainActivity : ComponentActivity() {
                         Text(if (offset in vm.search.pageErrors) "这一页加载失败" else "正在加载…", Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant)
                         if (offset in vm.search.pageErrors) TextButton(onClick = { vm.loadPage(offset, true) }) { Text("重试") }
                     }
-                } else FileRow(entry, if (vm.editing) "" else vm.query, vm.selectionMode, vm.selection.contains(index), vm.canOperateResults,
-                    onClick = { if (vm.selectionMode) vm.choose(entry) else {
+                } else FileRow(entry, if (vm.editing) "" else vm.query, vm.selectionMode, vm.selection.contains(index), vm.canOperateResults && (pickRequest == null || entry.directory || pickRequest.accepts(entry.mime(""))),
+                    onClick = { if (pickRequest != null) {
+                        if (entry.directory) vm.enterDirectory(entry) else vm.fileAction(entry, false, chooser = false, localCopy = true)
+                    } else if (vm.selectionMode) vm.choose(entry) else {
                         if (entry.kind() in setOf(FileKind.PROGRAM, FileKind.OTHER) && !entry.directory) showActions(entry) else vm.openPreview(entry)
                     } },
-                    onLongClick = { vm.choose(entry) }, onMore = { showActions(entry) })
+                    onLongClick = { if (pickRequest == null) vm.choose(entry) }, onMore = { showActions(entry) }, showMore = pickRequest == null)
             }
         }
         PullRefreshIndicator(vm.search.id.isEmpty() && vm.search.error == null && vm.canSearch, refresh, Modifier.align(Alignment.TopCenter))
@@ -404,7 +412,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable private fun FileRow(entry: Entry, query: String, selecting: Boolean, selected: Boolean, enabled: Boolean,
-    onClick: () -> Unit, onLongClick: () -> Unit, onMore: () -> Unit) {
+    onClick: () -> Unit, onLongClick: () -> Unit, onMore: () -> Unit, showMore: Boolean = true) {
     val primary = MaterialTheme.colorScheme.primary
     val title = remember(entry.name, query, primary) {
         buildAnnotatedString {
@@ -417,7 +425,7 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-    Column(Modifier.fillMaxWidth().background(if (selecting && selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
+    Column(Modifier.fillMaxWidth().then(if (enabled) Modifier else Modifier.graphicsLayer { alpha = 0.4f }).background(if (selecting && selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
         .combinedClickable(enabled = enabled, onClick = onClick, onLongClick = onLongClick).testTag("file-${entry.index}")) {
         Row(Modifier.fillMaxWidth().heightIn(min = 72.dp).padding(start = 20.dp, end = 8.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             if (selecting) Checkbox(selected, onCheckedChange = null) else FileGlyph(entry)
@@ -426,7 +434,7 @@ class MainActivity : ComponentActivity() {
                 Text(title, fontSize = 16.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 22.sp)
                 PathText(entry.parent.ifEmpty { "根目录" })
             }
-            if (!selecting) {
+            if (!selecting && showMore) {
                 IconButton(onClick = onMore, enabled = enabled, modifier = Modifier.testTag("more-${entry.index}")) { Icon(Icons.Outlined.MoreVert, "更多文件操作") }
             }
         }

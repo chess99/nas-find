@@ -57,6 +57,7 @@ class ClientFlowTest {
         6 -> Entry(i, "文档/旅行素材/子目录/深层.txt", "深层.txt")
         7 -> Entry(i, "文档/旅行素材/说明.txt", "说明.txt")
         8 -> Entry(i, "照片/第二张.png", "第二张.png")
+        9 -> Entry(i, "音频/._附属信息.wav", "._附属信息.wav")
         else -> Entry(i, "资料/旅行记录-${i.toString().padStart(4, '0')}.txt", "旅行记录-${i.toString().padStart(4, '0')}.txt")
     } }
     private val textContent = "这是一份合成的旅行日记。\n只用于 Android 客户端验证。"
@@ -79,6 +80,9 @@ class ClientFlowTest {
             putShort(1); putShort(1); putInt(16000); putInt(32000); putShort(2); putShort(16)
             put("data".toByteArray()); putInt(320000)
         }.array() // Ten seconds of silent PCM, to exercise decoding without audible test noise.
+        val appleDouble = ByteArray(4096).apply { this[1] = 5; this[2] = 22; this[3] = 7 }
+        fun bytesFor(file: String) = when { file.substringAfterLast('/').startsWith("._") -> appleDouble
+            file.endsWith(".png") -> png; file.endsWith(".pdf") -> pdf; file.endsWith(".wav") -> wav; else -> textContent.toByteArray() }
         server = MockWebServer()
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse {
@@ -122,12 +126,18 @@ class ClientFlowTest {
                 }
                 if (path == "/api/info") {
                     val file = url.queryParameter("path")!!
-                    return json(JSONObject().put("mime", when { file.endsWith(".pdf") -> "application/pdf"; file.endsWith(".png") -> "image/png"; file.endsWith(".wav") -> "audio/wav"; else -> "text/plain" }).put("size", 50))
+                    return json(JSONObject().put("mime", when { file.endsWith(".pdf") -> "application/pdf"; file.endsWith(".png") -> "image/png"; file.endsWith(".wav") -> "audio/wav"; else -> "text/plain" }).put("size", bytesFor(file).size))
                 }
                 if (path == "/api/preview") return json(JSONObject().put("text", textContent).put("truncated", false))
                 if (path == "/api/file") {
                     val file = url.queryParameter("path")!!
-                    val bytes = when { file.endsWith(".png") -> png; file.endsWith(".pdf") -> pdf; file.endsWith(".wav") -> wav; else -> textContent.toByteArray() }
+                    val bytes = bytesFor(file)
+                    request.getHeader("Range")?.let { range ->
+                        val (start, requestedEnd) = range.removePrefix("bytes=").split('-').map(String::toInt)
+                        val end = minOf(requestedEnd, bytes.size - 1)
+                        return MockResponse().setResponseCode(206).setHeader("Content-Range", "bytes $start-$end/${bytes.size}")
+                            .setBody(Buffer().write(bytes, start, end - start + 1))
+                    }
                     return MockResponse().setBody(Buffer().write(bytes))
                 }
                 return MockResponse().setResponseCode(404)
@@ -305,5 +315,40 @@ class ClientFlowTest {
         val requests = mutableListOf<RecordedRequest>()
         repeat(server.requestCount) { server.takeRequest(100, java.util.concurrent.TimeUnit.MILLISECONDS)?.let(requests::add) }
         assertTrue(requests.none { it.requestUrl?.encodedPath == "/api/file" })
+    }
+
+    @Test fun appleDoubleDoesNotLaunchAnAudioPlayer() {
+        browse()
+        ui.runOnIdle { vm.fileAction(all[9], false) }
+        ui.waitUntil(10000) { vm.fileFailure != null }
+        assertEquals("附属信息.wav", vm.fileFailure!!.related!!.name)
+        assertNull(vm.pendingOpen)
+        ui.onNodeWithText("打开对应文件").assertIsDisplayed()
+    }
+
+    @Test fun systemPickerReturnsFilteredReadableFileToAnotherApp() {
+        browse()
+        var received: Intent? = null
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) { received = intent }
+        }
+        ContextCompat.registerReceiver(ui.activity, receiver, IntentFilter("net.chess99.nasfind.TEST_PICKED"), ContextCompat.RECEIVER_EXPORTED)
+        try {
+            val pick = Intent(Intent.ACTION_GET_CONTENT).setType("image/*").addCategory(Intent.CATEGORY_OPENABLE).setPackage(ui.activity.packageName)
+            assertTrue(ui.activity.packageManager.queryIntentActivities(pick, 0).any { it.activityInfo.name.endsWith("FilePickerActivity") })
+            ui.activity.startActivity(Intent().setClassName("net.chess99.nasfind.debug.test", "net.chess99.nasfind.TestPickActivity").putExtra("mime", "image/*"))
+            ui.waitUntil(10000) { ui.onAllNodesWithText("选择图片").fetchSemanticsNodes().isNotEmpty() }
+            ui.onNodeWithTag("search-field").performTextReplacement("旅行")
+            ui.onNodeWithTag("search-field").performImeAction()
+            ui.waitUntil(10000) { ui.onAllNodesWithTag("file-2").fetchSemanticsNodes().isNotEmpty() }
+            ui.onNodeWithTag("file-0").assertIsNotEnabled()
+            ui.onNodeWithTag("file-2").performClick()
+            ui.waitUntil(10000) { received != null }
+            assertTrue(received!!.getBooleanExtra("readable", false))
+            assertEquals("旅行照片.png", received!!.getStringExtra("name"))
+            assertEquals("image/png", received!!.getStringExtra("mime"))
+            assertTrue(received!!.getLongExtra("count", 0) > 0)
+            assertEquals(0, received!!.getIntExtra("flags", 0) and (Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION))
+        } finally { ui.activity.unregisterReceiver(receiver) }
     }
 }

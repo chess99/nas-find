@@ -1,5 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application>
+        <activity android:name="net.chess99.nasfind.TestPickActivity" android:exported="true" android:label="NAS Find test picker caller" />
         <activity android:name="net.chess99.nasfind.TestOpenActivity" android:exported="true" android:label="NAS Find test receiver">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />

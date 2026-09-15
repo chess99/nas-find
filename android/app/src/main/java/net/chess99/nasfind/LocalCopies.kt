@@ -9,7 +9,11 @@ class LocalCopies(private val directory: File) {
         directory.mkdirs()
         val identity = listOf(server, path, "$size", version).joinToString("\u0000")
         val key = MessageDigest.getInstance("SHA-256").digest(identity.toByteArray()).joinToString("") { "%02x".format(it) }
-        val safe = name.replace(Regex("[\\\\/\\p{Cntrl}]"), "_").takeLast(100).ifEmpty { "file" }
+        val points = name.replace(Regex("[\\\\/\\p{Cntrl}]"), "_").ifEmpty { "file" }.codePoints().toArray()
+        var first = maxOf(0, points.size - 100)
+        var safe = String(points, first, points.size - first)
+        // Linux filename limits are bytes; 100 Chinese characters plus the hash can exceed 255.
+        while (safe.toByteArray(Charsets.UTF_8).size > 150) { first++; safe = String(points, first, points.size - first) }
         return File(directory, "${key}_$safe")
     }
     fun trim(now: Long = System.currentTimeMillis()) {

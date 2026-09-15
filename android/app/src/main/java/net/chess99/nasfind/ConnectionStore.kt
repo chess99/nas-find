@@ -46,9 +46,11 @@ class ConnectionStore(context: Context) {
     fun saveConnection(address: String, displayName: String, token: String) {
         // Prepare encryption before touching the current connection; publish all three fields together.
         val encoded = encryptedToken(token, address)
+        val changed = server != address || token() != token
         check(prefs.edit().putString("server", address).putString("name", displayName).putString("session", encoded).commit()) { "无法保存登录信息" }
+        if (changed) RemoteFileProvider.clear()
     }
-    fun forget() { prefs.edit().remove("session").apply() }
+    fun forget() { prefs.edit().remove("session").apply(); RemoteFileProvider.clear() }
     private fun historyKey() = "history:" + server
     fun history(): List<String> = runCatching {
         val values = JSONArray(prefs.getString(historyKey(), "[]"))

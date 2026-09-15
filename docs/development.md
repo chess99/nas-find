@@ -290,7 +290,7 @@ python3 -m unittest discover -s tests -v
 
 Android 0.2 使用 `FileKind` 统一默认打开与文件图标分类。图片和文本在客户端查看；文档准备本地副本后直接发出 `ACTION_VIEW`，只有“打开方式”显式使用选择器。保存文件的系统选址在下载之前完成，路径清单仍须完整生成后选址，防止发布不完整清单。
 
-`RemoteFileProvider` 通过 Android 8.0 起的 `StorageManager.openProxyFileDescriptor` 提供只读、可随机读取的媒体入口。授权只包含随机 URI，原始地址和登录会话保留在应用进程；`RangeReader` 以 256 KiB 块请求 HTTP Range，每个描述符最多保留 8 块。打开前验证一个小片段，服务忽略 Range、鉴权失败或网络故障会显示可重试的错误。退出或更换连接撤销授权；接收应用需在客户端进程存活期间使用入口。
+`RemoteFileProvider` 通过 Android 8.0 起的 `StorageManager.openProxyFileDescriptor` 提供只读、可随机读取的媒体入口。授权只包含随机 URI，原始地址和登录会话保留在应用进程；`RangeReader` 以 256 KiB 块请求 HTTP Range，每个描述符最多保留 8 块；一次回调必须跨块循环，直到填满请求或遇到真实 EOF，不能把单个缓存块尾部当成短读返回。打开前验证一个小片段，服务忽略 Range、鉴权失败或网络故障会显示可重试的错误。入口元数据写入应用私有目录，使用当前登录会话指纹校验，记录不包含明文 Cookie。退出或更换登录会话清除入口；客户端重启后可恢复 7 天内且仍属于原会话的 URI。正在读取的描述符不因新建入口的内存缓存淘汰而被撤销；进程死亡造成的旧描述符中断仍需接收应用重开。
 
 `/api/status` 的 `capabilities` 包含 `directory-browse` 时，Android 才启用逐级浏览。查询新增 `recursive` 布尔值，默认 `true` 保持旧客户端行为；`false` 在分页和选择之前限定直接子项。`/api/directories?scope=<相对目录>&offset=0` 从目录索引返回直接子文件夹，每页 200 项，不触碰源文件。文件信息的 `version` 用于区分本地缓存副本。
 
@@ -299,3 +299,20 @@ Android 0.2 使用 `FileKind` 统一默认打开与文件图标分类。图片�
 另有显式真实媒体检查 `MediaHandoffProbe`，不会在默认测试中使用真实 NAS。先按照上面的只读 NAS 检查保存登录，再指定 `mediaExtension`（mp4/flv/avi）及实际已安装的 `mediaPackage` 运行该测试类。它打开该类型的第一个搜索结果，保留 45 秒供人工观察播放与拖动，截图仅存于设备私有的测试输出目录。该检查的“应用已打开”断言不能代替人工确认画面和进度；不要将截图、真实文件名或连接信息提交仓库。
 
 原生 SSH 部署包包含 `docker/`，以便临时部署目录中的完整服务端测试可导入容器入口；这不会将原生部署切换为 Docker。
+
+### 文件打开兼容性与选择入口
+
+Android 官方 `ProxyFileDescriptorCallback.onRead` 要求：到达文件结尾之前返回完整请求长度。回归测试覆盖非对齐偏移、跨 256 KiB 缓存边界及真实系统文件描述符的字节一致性，也覆盖中途断流重试、取消、登录撤销及入口元数据恢复。`FileMime` 统一 Android 常见 MIME，`LocalCopies` 按 UTF-8 字节限制物理缓存文件名，避免中文长文件名叠加哈希后超过文件系统限制。
+
+`FilePickerActivity` 单独处理 `GET_CONTENT` / `PICK`，复用搜索和连接 UI，但文件点击准备完整副本并返回 `RESULT_OK`。返回真实 MIME、`ClipData` 和只读授权，不授予写入或持久化权限；遵守调用方 MIME 列表与 `EXTRA_LOCAL_ONLY`。当前单选，也不把普通 ContentProvider 冒充 SAF DocumentsProvider。设备测试中的 `TestPickActivity` 使用独立 APK/UID 调用选择器并读取返回文件，验证授权跨越 Activity 结束仍有效。
+
+实现参考与取舍：
+
+- [Android onRead 契约](https://developer.android.com/reference/android/os/ProxyFileDescriptorCallback#onRead(long,int,byte[]))：完整读取是接口要求。
+- [Material Files 的 FileProvider](https://github.com/zhanghai/MaterialFiles/blob/fc1250038496ebf4d4c139f62d16f0071f2c995a/app/src/main/java/me/zhanghai/android/files/file/FileProvider.kt)：可寻址字节通道与完整回调读取；远程文件同样可以通过代理文件描述符提供。
+- [Amaze 的文件打开实现](https://github.com/TeamAmaze/AmazeFileManager/blob/77afe92d0b6d0deeaddaf9b9cb63efce75c218c9/app/src/main/java/com/amaze/filemanager/filesystem/files/FileUtils.java)：SMB 媒体使用本地 HTTP Streamer，说明文件管理器可能采用不同的数据通路，不能仅凭播放器名称判断兼容性。
+- [Fossify File Manager 的入口声明](https://github.com/FossifyOrg/File-Manager/blob/f79e8b5ebd1b6d7fcc6ad130b6e3410e0bc90efd/app/src/main/AndroidManifest.xml)：用选择 Activity 接入 `GET_CONTENT`；出现于选择来源列表并不必然意味着实现了 DocumentsProvider。
+
+NAS Find 保留受控只读文件入口，修正其读取与生命周期行为，并提供显式完整副本备用操作；没有在本轮新增本地 HTTP 服务，也未修改 NAS 的文件访问协议。
+
+针对具体用户样本，`MediaHandoffProbe` 还接受 `-e mediaSample file`：测试启动前将 `{"path":"media/sample.mkv","player":"org.videolan.vlc","holdSeconds":60}` 通过 adb stdin 写入调试包私有 `files/media-probe.json`。用例读取后删除输入文件，逐字节比较非对齐跨块读取，再交给指定播放器观察。音频允许退回调用方后后台播放，以实际 MediaSession 播放状态确认持续播放；视频则同时检查播放器仍在前台。所有真实路径、截图和播放会话输出只保留在忽略的本地验证目录，不提交仓库。

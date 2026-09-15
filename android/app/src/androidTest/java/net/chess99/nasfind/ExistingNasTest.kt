@@ -42,7 +42,7 @@ class ExistingNasTest {
                 assertTrue("选择返回的路径与查询不一致", selected.getJSONArray("paths").getString(0) == page.rows.first().path)
             }
             val store = ConnectionStore(context)
-            store.forget(); store.server = api.server; store.name = "我的 NAS"; store.saveToken(api.session)
+            store.saveConnection(api.server, if (store.server == api.server) store.name else "我的 NAS", api.session)
             assertTrue("会话安全存储验证失败", store.token() == api.session)
         } finally { api.cancel(query.id) }
     }

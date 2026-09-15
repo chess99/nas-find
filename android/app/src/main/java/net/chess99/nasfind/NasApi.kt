@@ -21,46 +21,83 @@ import org.json.JSONObject
 class ApiException(val status: Int, message: String) : IOException(message)
 class TransportException(cause: IOException) : IOException(cause.message, cause)
 class CompatibilityException(message: String) : IOException(message)
+class RangeResponseException(message: String) : IOException(message)
+class RangeCancellation {
+    private val cancelled = java.util.concurrent.atomic.AtomicBoolean()
+    private val call = java.util.concurrent.atomic.AtomicReference<Call?>()
+    fun check() { if (cancelled.get()) throw java.io.InterruptedIOException("读取已取消") }
+    fun attach(value: Call) { call.set(value); if (cancelled.get()) value.cancel(); check() }
+    fun detach(value: Call) { call.compareAndSet(value, null) }
+    fun cancel() { cancelled.set(true); call.getAndSet(null)?.cancel() }
+}
 
 class NasApi(server: String, @Volatile var session: String = "") {
     val server = normalizeServer(server)
     private val client = OkHttpClient.Builder().proxy(Proxy.NO_PROXY)
         .followRedirects(false).followSslRedirects(false)
         .connectTimeout(10, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).build()
+    private val rangeClient = client.newBuilder().callTimeout(30, TimeUnit.SECONDS).build()
 
     fun url(path: String, params: Map<String, String> = emptyMap()): String = (server + path).toHttpUrl().newBuilder().apply {
         params.forEach { (key, value) -> addQueryParameter(key, value) }
     }.build().toString()
     fun fileUrl(path: String) = url("/api/file", mapOf("path" to path))
+    suspend fun prefix(path: String, count: Int = 4): ByteArray {
+        require(count in 1..4096)
+        return exchange(request("/api/file", mapOf("path" to path)).newBuilder().header("Range", "bytes=0-${count - 1}").build()) { response, _ ->
+            response.body!!.byteStream().readNBytesCompat(count)
+        }
+    }
     suspend fun probeFile(path: String, length: Long) {
         val end = minOf(4095, length - 1)
         exchange(request("/api/file", mapOf("path" to path)).newBuilder().header("Range", "bytes=0-$end").build()) { response, _ ->
-            if (response.code != 206 || response.header("Content-Range") != "bytes 0-$end/$length")
-                throw IOException("服务不支持按需读取，请更新服务端或检查代理")
+            checkRange(response, 0, end, length)
             val input = response.body!!.byteStream()
             repeat((end + 1).toInt()) { if (input.read() < 0) throw IOException("文件读取不完整") }
         }
     }
     // Android's media process does not share this app's network configuration or authentication.
     // Keep all NAS I/O here, including reads requested by external players through a file grant.
-    fun readRange(path: String, start: Long, end: Long, length: Long): ByteArray {
+    fun readRange(path: String, start: Long, end: Long, length: Long, cancellation: RangeCancellation = RangeCancellation()): ByteArray {
+        require(start >= 0 && end >= start && end < length && end - start < 256 * 1024)
         val request = request("/api/file", mapOf("path" to path)).newBuilder()
             .header("Range", "bytes=$start-$end").header("Accept-Encoding", "identity").build()
-        client.newBuilder().callTimeout(15, TimeUnit.SECONDS).build().newCall(request).execute().use { response ->
-            if (response.code == 401) throw ApiException(401, "需要重新登录")
-            if (response.code == 404) throw ApiException(404, "文件不存在或已移动")
-            if (response.code != 206 || response.header("Content-Range") != "bytes $start-$end/$length")
-                throw IOException("服务未返回所需文件片段，请检查服务版本或代理设置")
-            val expected = (end - start + 1).toInt()
-            val result = ByteArray(expected)
-            val input = response.body?.byteStream() ?: throw IOException("文件没有内容")
-            var offset = 0
-            while (offset < expected) {
-                val count = input.read(result, offset, expected - offset)
-                if (count < 0) throw IOException("文件读取不完整")
-                offset += count
-            }
-            return result
+        repeat(2) { attempt ->
+            cancellation.check()
+            val call = rangeClient.newCall(request)
+            try {
+                cancellation.attach(call)
+                call.execute().use { response ->
+                    checkRange(response, start, end, length)
+                    val result = ByteArray((end - start + 1).toInt())
+                    val input = response.body?.byteStream() ?: throw IOException("文件没有内容")
+                    var offset = 0
+                    while (offset < result.size) {
+                        cancellation.check()
+                        val count = input.read(result, offset, result.size - offset)
+                        if (count < 0) throw IOException("文件读取不完整")
+                        offset += count
+                    }
+                    return result
+                }
+            } catch (e: IOException) {
+                cancellation.check()
+                if (attempt == 1 || e is ApiException || e is RangeResponseException) throw e
+            } finally { cancellation.detach(call) }
+        }
+        error("读取失败")
+    }
+
+    private fun checkRange(response: Response, start: Long, end: Long, length: Long) {
+        if (!response.isSuccessful) throw ApiException(response.code, when (response.code) {
+            401 -> "需要重新登录"; 403 -> "服务拒绝读取此文件"; 404 -> "文件不存在或已移动"; else -> "文件读取失败（${response.code}）"
+        })
+        if (response.code == 200 && start == 0L && end == length - 1 && response.body?.contentLength() == length) return
+        val range = Regex("bytes\\s+(\\d+)-(\\d+)/(\\d+|\\*)", RegexOption.IGNORE_CASE)
+            .matchEntire(response.header("Content-Range").orEmpty().trim())?.groupValues
+        if (response.code != 206 || range == null || range[1].toLongOrNull() != start || range[2].toLongOrNull() != end ||
+            (range[3] != "*" && range[3].toLongOrNull() != length)) {
+            throw RangeResponseException("服务未返回所需文件片段，可选择下载后打开")
         }
     }
     fun request(path: String, params: Map<String, String> = emptyMap(), data: JSONObject? = null): Request =
@@ -145,4 +182,10 @@ class NasApi(server: String, @Volatile var session: String = "") {
             } }
         }
     }
+}
+
+private fun java.io.InputStream.readNBytesCompat(count: Int): ByteArray {
+    val result = ByteArray(count); var received = 0
+    while (received < count) { val n = read(result, received, count - received); if (n < 0) break; received += n }
+    return result.copyOf(received)
 }

@@ -20,27 +20,34 @@ import java.util.concurrent.ConcurrentHashMap
 /** A read-only, seekable file grant. The recipient never receives NAS credentials or URLs. */
 class RemoteFileProvider : ContentProvider() {
     data class Grant(val api: NasApi, val path: String, val name: String, val mime: String, val size: Long,
-        val modified: Long, var touched: Long = System.currentTimeMillis())
+        val modified: Long, @Volatile var touched: Long = System.currentTimeMillis(),
+        val readers: java.util.concurrent.atomic.AtomicInteger = java.util.concurrent.atomic.AtomicInteger())
 
     companion object {
         private val grants = ConcurrentHashMap<String, Grant>()
+        private var storageContext = java.lang.ref.WeakReference<android.content.Context>(null)
         fun register(context: android.content.Context, grant: Grant): Uri {
-            val cutoff = System.currentTimeMillis() - 24 * 60 * 60 * 1000L
-            grants.entries.removeAll { it.value.touched < cutoff }
-            if (grants.size >= 64) grants.entries.minByOrNull { it.value.touched }?.let { grants.remove(it.key) }
+            storageContext = java.lang.ref.WeakReference(context.applicationContext)
+            if (grants.size >= 64) grants.entries.filter { it.value.readers.get() == 0 }.minByOrNull { it.value.touched }?.let { grants.remove(it.key) }
             val token = UUID.randomUUID().toString()
+            RemoteGrantStore(context).apply { prune(grants.filterValues { it.readers.get() > 0 }.keys); save(token, grant) }
             grants[token] = grant
             return Uri.Builder().scheme("content").authority("${context.packageName}.remote").appendPath(token)
                 .appendPath(grant.name).build()
         }
-        fun clear() { grants.clear() }
+        fun clear() { grants.clear(); storageContext.get()?.let { RemoteGrantStore(it).clear() } }
+        fun revoke(uri: Uri) { uri.pathSegments.firstOrNull()?.let { token -> grants.remove(token); storageContext.get()?.let { RemoteGrantStore(it).remove(token) } } }
     }
 
-    private fun grant(uri: Uri): Grant = grants[uri.pathSegments.firstOrNull()]?.also {
-        it.touched = System.currentTimeMillis()
-    } ?: throw FileNotFoundException("文件访问已结束，请从 NAS Find 重新打开")
+    private fun grant(uri: Uri): Grant {
+        val token = uri.pathSegments.firstOrNull() ?: throw FileNotFoundException()
+        val result = grants[token] ?: RemoteGrantStore(context!!).load(token)?.let { grants.putIfAbsent(token, it) ?: it }
+            ?: throw FileNotFoundException("文件访问已结束，请从 NAS Find 重新打开")
+        result.touched = System.currentTimeMillis()
+        return result
+    }
 
-    override fun onCreate() = true
+    override fun onCreate(): Boolean { storageContext = java.lang.ref.WeakReference(context!!.applicationContext); return true }
     override fun getType(uri: Uri) = grant(uri).mime
     override fun query(uri: Uri, projection: Array<out String>?, selection: String?, selectionArgs: Array<out String>?, sortOrder: String?): Cursor {
         val file = grant(uri)
@@ -54,6 +61,7 @@ class RemoteFileProvider : ContentProvider() {
     override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor {
         if (mode != "r") throw FileNotFoundException("只支持读取")
         val file = grant(uri)
+        file.readers.incrementAndGet()
         val worker = HandlerThread("nas-file-reader").apply { start() }
         val reader = RangeReader(file.api, file.path, file.size)
         return try {
@@ -65,10 +73,18 @@ class RemoteFileProvider : ContentProvider() {
                         if (grants[uri.pathSegments[0]] !== file) throw FileNotFoundException()
                         file.touched = System.currentTimeMillis()
                         reader.read(offset, size, data)
-                    } catch (_: Exception) { throw ErrnoException("read", OsConstants.EIO) }
-                    override fun onRelease() { reader.close(); worker.quitSafely() }
+                    } catch (e: Exception) {
+                        val code = when { e is ApiException && e.status in listOf(401, 403) -> OsConstants.EACCES
+                            e is ApiException && e.status == 404 -> OsConstants.ENOENT
+                            e is java.io.FileNotFoundException -> OsConstants.ENOENT
+                            e is java.net.SocketTimeoutException -> OsConstants.ETIMEDOUT
+                            e is java.io.InterruptedIOException -> OsConstants.ECANCELED
+                            else -> OsConstants.EIO }
+                        throw ErrnoException("read", code, e)
+                    }
+                    override fun onRelease() { reader.close(); file.readers.decrementAndGet(); worker.quitSafely() }
                 }, Handler(worker.looper))
-        } catch (e: Exception) { reader.close(); worker.quitSafely(); throw FileNotFoundException("无法提供文件读取：${e.message}") }
+        } catch (e: Exception) { reader.close(); file.readers.decrementAndGet(); worker.quitSafely(); throw FileNotFoundException("无法提供文件读取：${e.message}") }
     }
     override fun insert(uri: Uri, values: ContentValues?): Uri? = throw UnsupportedOperationException()
     override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?): Int = throw UnsupportedOperationException()
@@ -77,19 +93,30 @@ class RemoteFileProvider : ContentProvider() {
 
 /** Small bounded blocks allow both sequential playback and arbitrary seeks without a full download. */
 class RangeReader(private val api: NasApi, private val path: String, private val length: Long) : java.io.Closeable {
+    private val cancellation = RangeCancellation()
     private val blocks = object : LinkedHashMap<Long, ByteArray>(16, .75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Long, ByteArray>?) = size > 8
     }
     @Synchronized fun read(offset: Long, requested: Int, target: ByteArray): Int {
-        require(offset >= 0 && requested >= 0)
+        require(offset >= 0 && requested >= 0 && requested <= target.size)
+        cancellation.check()
         if (offset >= length || requested == 0) return 0
         val blockSize = 256 * 1024L
-        val start = offset / blockSize * blockSize
-        val bytes = blocks.getOrPut(start) { api.readRange(path, start, minOf(length - 1, start + blockSize - 1), length) }
-        val from = (offset - start).toInt()
-        val count = minOf(requested, target.size, bytes.size - from)
-        bytes.copyInto(target, 0, from, from + count)
-        return count
+        val wanted = minOf(requested.toLong(), length - offset).toInt()
+        var copied = 0
+        // ProxyFileDescriptorCallback requires a full read before EOF, even across cache blocks.
+        while (copied < wanted) {
+            cancellation.check()
+            val position = offset + copied
+            val start = position / blockSize * blockSize
+            val bytes = blocks.getOrPut(start) { api.readRange(path, start, minOf(length - 1, start + blockSize - 1), length, cancellation) }
+            val from = (position - start).toInt()
+            val count = minOf(wanted - copied, bytes.size - from)
+            check(count > 0) { "文件读取不完整" }
+            bytes.copyInto(target, copied, from, from + count)
+            copied += count
+        }
+        return copied
     }
-    @Synchronized override fun close() { blocks.clear() }
+    override fun close() { cancellation.cancel() }
 }

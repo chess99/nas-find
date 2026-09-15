@@ -121,6 +121,9 @@ import java.util.Date
             Spacer(Modifier.height(12.dp))
             if (!entry.directory) {
                 ActionRow(Icons.AutoMirrored.Outlined.OpenInNew, "打开方式") { close(); vm.fileAction(entry, false) }
+                if (entry.kind() == FileKind.MEDIA) ActionRow(Icons.Outlined.DownloadForOffline, "下载后打开", "先下载完整文件", "open-local-copy") {
+                    close(); vm.fileAction(entry, false, localCopy = true)
+                }
                 ActionRow(Icons.Outlined.FileDownload, "保存到手机", tag = "save-file") { close(); vm.fileAction(entry, true) }
                 ActionRow(Icons.Outlined.Share, "分享文件") { close(); vm.fileAction(entry, false, share = true) }
             }
