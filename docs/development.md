@@ -153,6 +153,8 @@ npm test
 
 准备 JDK 17、Android SDK Platform 34 和 Build Tools 34.0.0。Android 工程独立位于 `android/`，使用 Kotlin、Jetpack Compose 和 Gradle Wrapper；可直接在 Android Studio 打开该目录。最低支持 Android 8.0（API 26）。
 
+CI 的 SDK 安装步骤明确选择 `platform-tools`，随后安装上述固定平台和构建工具版本，不请求已废弃的旧 `tools` 组件。
+
 将 `JAVA_HOME` 指向自己的 JDK，将 `ANDROID_HOME` 指向自己的 SDK；也可在被忽略的 `android/local.properties` 中设置 `sdk.dir`。不要把机器路径或签名密码写入提交的文件。
 
 Windows 从仓库根目录执行：
