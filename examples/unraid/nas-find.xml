@@ -10,6 +10,7 @@
   <Overview>NAS 文件名搜索，提供网页和 Windows / macOS 客户端。数据目录只读。首次启动后从配置目录的 password 文件读取登录密码。请填写实际共享目录、SMB 根路径和可信网段。</Overview>
   <Category>Tools:</Category>
   <WebUI>http://[IP]:[PORT:8765]/</WebUI>
+  <Icon>https://raw.githubusercontent.com/chess99/nas-find/main/desktop/src-tauri/icons/icon.png</Icon>
   <ExtraParams>--init --stop-timeout=45</ExtraParams>
   <Config Name="网页端口" Target="8765" Default="8765" Mode="tcp" Description="局域网访问端口" Type="Port" Display="always" Required="true" Mask="false">8765</Config>
   <Config Name="索引共享目录" Target="/data" Default="" Mode="ro" Description="填写已存在的 /mnt/user/共享名；一个实例对应一个共享" Type="Path" Display="always" Required="true" Mask="false"/>
