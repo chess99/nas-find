@@ -78,6 +78,8 @@ node scripts/version.mjs check
 node --test scripts/release.test.mjs
 ```
 
+可供用户安装验证的未发布构建使用 `-rc.N` 预发布版本号；新增功能后，不复用已经发布的版本号。功能变化和兼容性要求统一维护在根目录 `CHANGELOG.md`，发版时将“未发布”条目归入对应版本。使用和部署文档维护当前行为与操作步骤。
+
 版本支持 `major.minor.patch` 和 `major.minor.patch-rc.N`。新增功能增加次版本，兼容修复增加修订号；破坏兼容的变更需明确说明迁移要求。`bump` 拒绝降级或重复版本，RC 转正式版的 Android 序号也递增。标签发布会进一步检查历史标签，版本与 Android 序号必须高于旧发布。
 
 产品版本与接口协议分开维护：`/api/status` 返回 `version`、`api_version`、`min_client_api_version` 和 `capabilities`。协议常量位于 `nasfind/protocol.py`，新增兼容功能通过能力标记声明，不随产品版本自动升级协议。客户端允许兼容的不同产品版本；旧服务未提供协议字段时按现有协议 1 处理。服务器要求更高客户端协议时提示更新客户端。网页随服务端一起交付，Android 和桌面设置中可查看服务器版本；命令行可执行 `python -m nasfind --version`。

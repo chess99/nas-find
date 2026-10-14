@@ -8,7 +8,6 @@
   <Support>https://github.com/chess99/nas-find/issues</Support>
   <Project>https://github.com/chess99/nas-find</Project>
   <Overview>NAS 文件名搜索，提供网页和 Windows / macOS 客户端。数据目录只读。首次启动后从配置目录的 password 文件读取登录密码。请填写实际共享目录、SMB 根路径和可信网段。</Overview>
-  <Icon>https://raw.githubusercontent.com/chess99/nas-find/main/desktop/src-tauri/icons/icon.png</Icon>
   <Category>Tools:</Category>
   <WebUI>http://[IP]:[PORT:8765]/</WebUI>
   <Icon>https://raw.githubusercontent.com/chess99/nas-find/main/desktop/src-tauri/icons/icon.png</Icon>

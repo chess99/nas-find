@@ -6,6 +6,7 @@
 
 | 文档 | 内容 |
 |---|---|
+| [更新记录](../CHANGELOG.md) | 功能变更、发布版本与兼容性要求 |
 | [使用说明](usage.md) | 搜索、选择、文件访问和导出 |
 | [部署文档](deployment.md) | 环境准备、配置、运行、升级与排障 |
 | [开发文档](development.md) | 架构、源码入口、构建、测试和发布准备 |
@@ -16,6 +17,7 @@
 
 ```text
 README.md
+CHANGELOG.md
 AGENTS.md
 docs/
   README.md

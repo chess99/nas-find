@@ -76,14 +76,23 @@ docker compose --env-file .local/docker.env logs --tail=50
 
 ### 多个索引共享
 
-多共享功能需要使用包含此功能的新服务端和客户端；0.5.0 安装包不支持。网页随服务端更新。启用多共享后，旧客户端会提示升级。
+每个索引源对应一个 NAS 目录及其 SMB 共享路径。NAS 管理员负责配置目录挂载和索引源，客户端连接后自动读取共享列表。版本要求见[更新记录](../CHANGELOG.md)。
 
-以 Unraid 的 `/mnt/user/data` 和 `/mnt/user/download` 为例：
+以两个 Unraid 共享为例，各层路径的对应关系如下。表中的主机名和盘符按实际环境替换。
+
+| NAS 目录（Host Path） | 容器目录（Container Path） | SMB 共享路径 | Windows 映射盘示例（可选） |
+|---|---|---|---|
+| `/mnt/user/data` | `/data` | `\\nas.example.internal\data` | `Z:` |
+| `/mnt/user/download` | `/downloads` | `\\nas.example.internal\download` | `Y:` |
+
+容器通过 `/data`、`/downloads` 读取文件，Windows 通过 SMB 共享访问同一批文件。盘符是 Windows 本机的可选别名；NAS Find 的多共享模式直接使用 SMB 路径。配置前，在 Unraid 中启用这两个共享的 SMB 访问，并确认桌面用户具有所需权限。
+
+#### Unraid 配置步骤
 
 1. 停止容器，备份专用配置目录。保留原有 `/config` 映射、密码与索引文件。
 2. 保留第一个只读路径映射 `/mnt/user/data` → `/data`。在 Unraid 编辑容器页面点 **Add another Path, Port, Variable, Label or Device**，新增 **Path**：Host Path 填 `/mnt/user/download`，Container Path 填 `/downloads`，Access Mode 选 **Read Only**。
 3. 展开高级设置，在模板的“多共享索引源（JSON）”中填写下面的数组。旧模板可自行新增同名环境变量 `NAS_FIND_SOURCES`。`root` 填容器路径，`unc_prefix` 填该目录对应的 SMB 共享根路径；替换示例主机名。
-4. 应用配置并启动容器。登录网页，默认在“全部共享”中搜索，也可选择单个共享。
+4. 应用配置并启动容器，等待各共享完成首次索引。登录网页或重新连接桌面客户端，搜索区会显示“共享”筛选；桌面“连接设置”会显示两个共享。Windows 可直接打开结果；macOS 还需在此填写每个共享的本机挂载路径。
 
 ```json
 [
