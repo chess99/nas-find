@@ -80,7 +80,11 @@ test('不接受额外平台或空安装包', t => {
 });
 
 test('统一版本升级自动递增 Android 序号，rc 到正式版可覆盖升级', t => {
-  const directory = fixture(t), before = readVersion(directory);
+  const directory = fixture(t);
+  // Keep this scenario independent of the repository's current release version.
+  writeFileSync(join(directory, 'version.json'), JSON.stringify({version: '0.5.0', androidVersionCode: 3}));
+  syncVersions(directory);
+  const before = readVersion(directory);
   const rc = bumpVersion(directory, '0.6.0-rc.1');
   assert.equal(rc.androidVersionCode, before.androidVersionCode + 1);
   assert.equal(versionOf(directory), '0.6.0-rc.1');
