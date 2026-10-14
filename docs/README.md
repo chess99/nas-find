@@ -10,6 +10,7 @@
 | [使用说明](usage.md) | 搜索、选择、文件访问和导出 |
 | [部署文档](deployment.md) | 环境准备、配置、运行、升级与排障 |
 | [开发文档](development.md) | 架构、源码入口、构建、测试和发布准备 |
+| [官网维护](website.md) | 中英双语页面、SEO、统计与 GitHub Pages 发布 |
 
 仓库根目录的 [README](../README.md) 用于介绍项目，[AGENTS.md](../AGENTS.md) 用于协作导航。
 

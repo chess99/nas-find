@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+<symbol id="arrow" viewBox="0 0 24 24"><path d="M4 12h15m-6-6 6 6-6 6"/></symbol>
+<symbol id="download" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M5 16v4h14v-4"/></symbol>
+<symbol id="search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></symbol>
+<symbol id="check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+<symbol id="code" viewBox="0 0 24 24"><path d="m7 6-6 6 6 6m10-12 6 6-6 6m-3-15-4 18"/></symbol>
+<symbol id="folder" viewBox="0 0 24 24"><path d="M3 7V4h6l3 3h9v13H3Z"/></symbol>
+<symbol id="external" viewBox="0 0 24 24"><path d="M14 3h7v7m0-7L10 14m-1-9H3v16h16v-6"/></symbol>
+<symbol id="list" viewBox="0 0 24 24"><path d="M9 6h12M9 12h12M9 18h12m-18-12h1m-1 6h1m-1 6h1"/></symbol>
+<symbol id="server" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01m4-11h6m-6 11h6"/></symbol>
+<symbol id="monitor" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8m-4-4v4"/></symbol>
+<symbol id="phone" viewBox="0 0 24 24"><rect x="6" y="2" width="12" height="20" rx="3"/><path d="M10 5h4m-2 14h.01"/></symbol>
+<symbol id="globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><path d="M3 12h18"/></symbol>
+<symbol id="windows" viewBox="0 0 24 24"><path d="M2 4 10 3v8H2Zm11-1 9-1v9h-9ZM2 14h8v8l-8-1Zm11 0h9v9l-9-1Z" fill="currentColor" stroke="none"/></symbol>
+<symbol id="apple" viewBox="0 0 24 24"><path d="M16 2c-2 .2-3 1.6-3 4 2 0 3-1.4 3-4ZM19.5 8c-3-3-5-.6-7.5-.6S7 5 4.7 8.4C1.3 13.6 6 22 9.1 22c1.2 0 1.8-.8 3-.8s2 .8 3.2.8c1.8 0 3.8-2.8 4.6-5-4-1.9-3.9-6.3-.4-9Z" fill="currentColor" stroke="none"/></symbol>
+<symbol id="android" viewBox="0 0 24 24"><path d="m7 4-2-3m12 3 2-3M3 12a9 9 0 0 1 18 0Zm0 3h18v5H3Z"/><path d="M8 8h.01M16 8h.01m-9 12v3m10-3v3M1 14v5m22-5v5"/></symbol>
+<symbol id="github" viewBox="0 0 24 24"><path d="M9 21c-5 1.5-5-2.5-7-3m14 5v-4a3.5 3.5 0 0 0-1-2.7c3.3-.4 6.7-1.6 6.7-7.3A5.7 5.7 0 0 0 20.2 5a5.3 5.3 0 0 0-.1-4s-1.3-.4-4.2 1.5a14.4 14.4 0 0 0-7.6 0C5.4.6 4.1 1 4.1 1A5.3 5.3 0 0 0 4 5a5.7 5.7 0 0 0-1.5 4c0 5.7 3.4 6.9 6.7 7.3A3.5 3.5 0 0 0 8.2 19v4" transform="translate(1 1) scale(.9)"/></symbol>
+</svg>

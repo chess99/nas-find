@@ -2,6 +2,8 @@
 
 **在 Windows、Mac 和 Android 手机上，快速找到 NAS 里的文件。**
 
+[官网](https://nas-find.cearl.cc/) · [English website](https://nas-find.cearl.cc/en/) · [下载客户端](https://nas-find.cearl.cc/#download)
+
 面向 Linux / NAS 的文件名搜索工具，提供网页界面、Windows / macOS 桌面客户端和 Android 客户端。
 
 索引在 NAS 本机统一维护，多个设备共用，客户端无需各自扫描共享目录建立索引。搜索结果按需传输，桌面客户端通过 SMB 共享（Windows UNC / 映射盘，macOS Finder 挂载目录），用系统默认应用打开原文件。
