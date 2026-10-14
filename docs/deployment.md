@@ -91,7 +91,7 @@ docker compose --env-file .local/docker.env logs --tail=50
 
 1. 停止容器，备份专用配置目录。保留原有 `/config` 映射、密码与索引文件。
 2. 保留第一个只读路径映射 `/mnt/user/data` → `/data`。在 Unraid 编辑容器页面点 **Add another Path, Port, Variable, Label or Device**，新增 **Path**：Host Path 填 `/mnt/user/download`，Container Path 填 `/downloads`，Access Mode 选 **Read Only**。
-3. 找到环境变量 `NAS_FIND_SOURCES`（模板中的“多共享索引配置（JSON）”），把下面包含两个索引源的完整数组填入其值。旧模板可能需要展开高级设置，或新增一个 Key 为 `NAS_FIND_SOURCES` 的 Variable。每项 `root` 填容器路径，`unc_prefix` 填对应的 SMB 共享路径；替换示例主机名。
+3. 找到环境变量 `NAS_FIND_SOURCES`（模板中的“多共享索引配置（JSON）”），点 **Edit**，把下面的完整数组填入 **Value**。旧模板先点 **Show more settings…**，查找已有的“多共享索引源（JSON）”项；确认现有项中没有这个 Key 后才新增 Variable。以字段下方的 **Container Variable: NAS_FIND_SOURCES** 为准，**Name** 只是显示名称。每项 `root` 填容器路径，`unc_prefix` 填对应的 SMB 共享路径；替换示例主机名。
 4. 应用配置并启动容器，等待各共享完成首次索引。登录网页或重新连接桌面客户端，搜索区会显示“共享”筛选；桌面“连接设置”会显示两个共享。Windows 可直接打开结果；macOS 还需在此填写每个共享的本机挂载路径。
 
 ```json
@@ -108,6 +108,8 @@ docker compose --env-file .local/docker.env logs --tail=50
 JSON 中反斜杠需要转义；Unraid 输入框中直接粘贴 JSON，不在整个数组外加引号。可添加更多只读路径映射和索引源，最多 32 个。不同源的本地目录不能重复或互相包含。每个源必须是有效挂载，避免容器路径写错后把空目录当作共享。
 
 也可在停止容器后，给 `/config/config.json` 添加同结构的 `sources` 数组。非空的 `NAS_FIND_SOURCES` 每次启动都会覆盖保存值；环境变量留空时沿用保存的数组。以后编辑文件配置前应清空该环境变量。恢复单共享时，清空环境变量并删除保存配置中的 `sources`，保留原来的 `/data` 映射和 `NAS_FIND_UNC_PREFIX`。
+
+保存前确认所有设置（包括折叠项）中只保留一个 Key 为 `NAS_FIND_SOURCES` 的变量。若生成的启动命令同时出现带 JSON 的一条和 `-e 'NAS_FIND_SOURCES'=''`，后面的空值会覆盖配置。将 JSON 填入模板原有项，删除重复新增项，再点“应用”。
 
 应用配置后，可检查 `/config/config.json` 是否出现包含全部索引源的 `sources` 数组。只有 `root` 和 `unc_prefix` 时仍是单共享配置。网页的“共享”筛选应列出已配置的共享；等待各源首次索引完成后即可搜索。
 
