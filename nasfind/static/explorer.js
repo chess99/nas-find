@@ -1,18 +1,27 @@
 import {Selection} from './selection.js';
 const TYPES=[['all','全部'],['video','视频'],['audio','音频'],['image','图片'],['document','文档'],['archive','压缩包'],['program','程序'],['folder','文件夹']];
+export function scopedPath(source, directory) {
+  directory=directory.trim().replaceAll('\\','/');
+  return source?(directory?source+'/'+directory:source):directory;
+}
+export function uncPath(path, root, sources=[]) {
+  if(sources.length){const [id,...parts]=path.split('/'),source=sources.find(s=>s.id===id);if(!source)throw Error('索引源已变化，请重新连接');root=source.unc_prefix;path=parts.join('/');}
+  return root+(path?'\\'+path.replaceAll('/','\\'):'');
+}
 const ROW=34,PAGE=500,MAX_HEIGHT=16000000;
 export class Explorer {
   constructor(root,adapter) {
     this.root=root;this.api=adapter;this.selection=new Selection();this.cache=new Map();this.inflight=new Map();this.version=0;this.total=0;this.ready=false;this.connected=false;this.composing=false;this.copyBusy=false;
     root.classList.add('explorer');
-    root.innerHTML=`<form class="ex-search"><div class="ex-searchbox"><span>⌕</span><input class="ex-query" aria-label="搜索文件名" placeholder="搜索文件名，留空浏览全部" autocomplete="off"><kbd>Ctrl F</kbd></div><div class="ex-filters"><label>类型 <select class="ex-category" aria-label="文件类型">${TYPES.map(([v,t])=>`<option value="${v}">${t}</option>`).join('')}</select></label><label>扩展名 <input class="ex-extension" placeholder="例如 mkv" aria-label="精确扩展名"></label><label>目录 <input class="ex-scope" placeholder="全部目录" aria-label="目录范围"></label><label class="ex-check"><input type="checkbox" class="ex-match">匹配路径</label><button type="button" class="ex-reset">重置</button><button type="submit">搜索</button></div></form><div class="ex-toolbar"><span class="ex-count">等待连接</span><span class="ex-time"></span><span class="ex-spacer"></span><button class="ex-open">打开</button><button class="ex-reveal">打开位置</button><button class="ex-copy">复制路径</button><button class="ex-export">导出路径</button></div><div class="ex-notice" role="status" hidden></div><div class="ex-head"><span>名称</span><span>所在目录</span><span>类型</span></div><div class="ex-viewport" tabindex="0" role="grid" aria-label="搜索结果" aria-multiselectable="true"><div class="ex-space"><div class="ex-visible"></div></div><div class="ex-empty">连接后即可浏览文件</div></div><div class="ex-selection"><span>Ctrl+A 全选全部结果 · Ctrl+Shift+C 复制路径</span><button class="ex-clear">取消选择</button></div><div class="ex-task" hidden><span></span><button class="ex-cancel">取消</button><button class="ex-save" hidden>导出为 TXT</button><button class="ex-dismiss" hidden>关闭</button></div>`;
+    root.innerHTML=`<form class="ex-search"><div class="ex-searchbox"><span>⌕</span><input class="ex-query" aria-label="搜索文件名" placeholder="搜索文件名，留空浏览全部" autocomplete="off"><kbd>Ctrl F</kbd></div><div class="ex-filters"><label class="ex-source-label" hidden>共享 <select class="ex-source" aria-label="索引共享"><option value="">全部共享</option></select></label><label>类型 <select class="ex-category" aria-label="文件类型">${TYPES.map(([v,t])=>`<option value="${v}">${t}</option>`).join('')}</select></label><label>扩展名 <input class="ex-extension" placeholder="例如 mkv" aria-label="精确扩展名"></label><label>目录 <input class="ex-scope" placeholder="全部目录" aria-label="目录范围"></label><label class="ex-check"><input type="checkbox" class="ex-match">匹配路径</label><button type="button" class="ex-reset">重置</button><button type="submit">搜索</button></div></form><div class="ex-toolbar"><span class="ex-count">等待连接</span><span class="ex-time"></span><span class="ex-spacer"></span><button class="ex-open">打开</button><button class="ex-reveal">打开位置</button><button class="ex-copy">复制路径</button><button class="ex-export">导出路径</button></div><div class="ex-notice" role="status" hidden></div><div class="ex-head"><span>名称</span><span>所在目录</span><span>类型</span></div><div class="ex-viewport" tabindex="0" role="grid" aria-label="搜索结果" aria-multiselectable="true"><div class="ex-space"><div class="ex-visible"></div></div><div class="ex-empty">连接后即可浏览文件</div></div><div class="ex-selection"><span>Ctrl+A 全选全部结果 · Ctrl+Shift+C 复制路径</span><button class="ex-clear">取消选择</button></div><div class="ex-task" hidden><span></span><button class="ex-cancel">取消</button><button class="ex-save" hidden>导出为 TXT</button><button class="ex-dismiss" hidden>关闭</button></div>`;
     this.$=name=>root.querySelector(`.ex-${name}`);this.viewport=this.$('viewport');
     this.$('search').onsubmit=e=>{e.preventDefault();this.search();};
     this.$('query').oncompositionstart=()=>{this.composing=true;this.invalidate();};
     this.$('query').oncompositionend=()=>{this.composing=false;this.schedule();};
     this.$('query').oninput=()=>this.schedule();
     for(const name of ['category','extension','scope','match'])this.$(name).onchange=()=>this.search();
-    this.$('reset').onclick=()=>{this.$('category').value='all';this.$('extension').value='';this.$('scope').value='';this.$('match').checked=false;this.search();};
+    this.$('source').onchange=()=>{this.$('scope').placeholder=this.$('source').value?'共享内目录':'全部目录';this.$('scope').value='';this.search();};
+    this.$('reset').onclick=()=>{this.$('source').value='';this.$('scope').placeholder='全部目录';this.$('category').value='all';this.$('extension').value='';this.$('scope').value='';this.$('match').checked=false;this.search();};
     this.$('open').onclick=()=>this.singleAction('open');this.$('reveal').onclick=()=>this.singleAction('reveal');
     this.$('copy').onclick=()=>this.bulk('clipboard');this.$('export').onclick=()=>this.bulk('export');
     this.$('clear').onclick=()=>{this.selection.clear();this.paint();};
@@ -26,6 +35,22 @@ export class Explorer {
     new ResizeObserver(()=>this.draw()).observe(this.viewport);
     this.updateSelection();
   }
+  setSources(sources=[]) {
+    const signature=JSON.stringify(sources.map(s=>[s.id,s.name,s.available,s.error,s.watcher?.errors]));
+    if(signature===this.sourceSignature)return;
+    this.sourceSignature=signature;this.sources=sources;
+    const select=this.$('source'),previous=select.value;
+    select.replaceChildren(new Option('全部共享',''));
+    for(const source of sources)select.add(new Option(source.name+(!source.available?' · 等待索引':source.error||source.watcher?.errors?.length?' · 索引异常':''),source.id));
+    select.value=sources.some(s=>s.id===previous)?previous:'';
+    this.$('source-label').hidden=!sources.length;
+    this.$('scope').placeholder=select.value?'共享内目录':'全部目录';
+  }
+  setScope(path) {
+    const [source,...parts]=path.split('/');
+    if(this.sources?.length){this.$('source').value=source;this.$('scope').value=parts.join('/');}
+    else this.$('scope').value=path;
+  }
   notify(text){this.api.notify(this.api.platform==='macos'?text.replaceAll('Ctrl','⌘'):text);}
   setConnected(value){this.connected=value;this.root.querySelectorAll('.ex-search input,.ex-search select,.ex-search button').forEach(el=>el.disabled=!value);if(!value)this.invalidate();}
   invalidate(){clearTimeout(this.timer);clearTimeout(this.pollTimer);this.version++;if(this.id&&!this.ready)this.api.cancel(this.id).catch(()=>{});this.id=null;this.total=0;this.ready=false;this.selection.clear();this.cache.clear();this.inflight.clear();this.draw();}
@@ -33,7 +58,7 @@ export class Explorer {
   async search(){
     this.invalidate();if(!this.connected)return;const version=this.version;
     this.$('count').textContent='正在搜索…';this.$('notice').hidden=true;this.viewport.scrollTop=0;
-    try{const info=await this.api.create({query:this.$('query').value.trim(),category:this.$('category').value,extension:this.$('extension').value.trim(),scope:this.$('scope').value.trim(),match_path:this.$('match').checked});
+    try{const info=await this.api.create({query:this.$('query').value.trim(),category:this.$('category').value,extension:this.$('extension').value.trim(),scope:scopedPath(this.$('source').value,this.$('scope').value),match_path:this.$('match').checked});
       if(version!==this.version){this.api.cancel(info.id).catch(()=>{});return;}
       this.id=info.id;this.accept(info);await this.load(0);this.poll();
     }catch(e){if(version===this.version)this.fail(e);}
@@ -101,7 +126,7 @@ export class Explorer {
     const count=this.selection.count(this.total);if(!count)return;const single=count===1,items=[];
     if(single)items.push({text:'打开',action:()=>this.singleAction('open')},{text:'打开所在位置',action:()=>this.singleAction('reveal')},{text:'打开方式…',action:()=>this.singleAction('open_with')},{text:'复制文件',action:()=>this.singleAction('copy_file')},{separator:true});
     items.push({text:`复制路径${count>1?`（${count.toLocaleString()} 项）`:''}`,enabled:this.ready,action:()=>this.bulk('clipboard')},{text:'复制带引号的路径',enabled:this.ready,action:()=>this.bulk('clipboard',{quoted:true})},{text:'复制 UNC 路径',enabled:this.ready,action:()=>this.bulk('clipboard',{unc:true})},{text:'导出 TXT 路径清单',enabled:this.ready,action:()=>this.bulk('export')},{text:'导出 CSV 完整清单',enabled:this.ready,action:()=>this.bulk('export',{format:'csv'})});
-    if(single)items.push({separator:true},{text:'属性 / 详情',action:()=>this.singleAction('properties')},{text:'在此目录内搜索',action:async()=>{const f=await this.selectedFile();this.$('scope').value=f.directory?f.path:f.path.slice(0,Math.max(0,f.path.lastIndexOf('/')));this.search();}});
+    if(single)items.push({separator:true},{text:'属性 / 详情',action:()=>this.singleAction('properties')},{text:'在此目录内搜索',action:async()=>{const f=await this.selectedFile();this.setScope(f.directory?f.path:f.path.slice(0,Math.max(0,f.path.lastIndexOf('/'))));this.search();}});
     if(this.api.platform==='macos'){const index=items.findIndex(item=>item.text==='打开方式…');if(index>=0)items.splice(index,1);}
     if(this.api.systemMenu){const request={id:this.id,selection:this.selection.payload()};items.push({separator:true},{text:'系统右键菜单…',enabled:this.ready&&!this.systemMenuBusy,action:()=>this.openSystemMenu(request)});}
     items.push({separator:true},{text:'取消选择',action:()=>{this.selection.clear();this.draw();}});

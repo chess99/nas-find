@@ -18,10 +18,13 @@
     </button>
     <div class="divider"></div>
     <p class="section-label">电脑文件访问</p>
-    <label>Samba 共享根路径<input id="share" required></label>
+    <div id="source-settings" hidden></div>
+    <div id="single-share-settings">
+    <label>Samba 共享根路径<input id="share" placeholder="连接后自动读取，也可手动填写"></label>
     <label id="mount-setting" hidden>本机 SMB 挂载路径<input id="mount-path" placeholder="/Volumes/files"></label>
     <div class="mapping"><label>映射盘<input id="drive" placeholder="Z:"></label><label class="check"><input type="checkbox" id="prefer-drive" checked>优先使用映射盘</label></div>
     <p class="help platform-help">映射不匹配或不可用时使用共享路径。打开文件沿用 Windows 的共享登录权限。</p>
+    </div>
     <p id="settings-error" class="error" role="alert"></p>
     <div class="dialog-actions"><button type="button" id="disconnect">退出并忘记登录</button><span class="spacer"></span><button id="connect" class="primary" type="submit">保存并连接</button></div>
   </form>

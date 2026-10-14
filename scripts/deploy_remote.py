@@ -72,11 +72,12 @@ def service_url(config, explicit=None):
 
 
 def preflight(config):
-    root = Path(config["root"])
-    if not root.is_dir() or not os.access(root, os.R_OK | os.X_OK):
-        raise ValueError("索引目录不存在或运行用户没有读取权限")
-    if config["require_mount"] and not os.path.ismount(root):
-        raise ValueError("root 不是挂载点，请检查索引范围与 require_mount")
+    for source in config.get("sources", [config]):
+        root = Path(source["root"])
+        if not root.is_dir() or not os.access(root, os.R_OK | os.X_OK):
+            raise ValueError("索引目录不存在或运行用户没有读取权限")
+        if source["require_mount"] and not os.path.ismount(root):
+            raise ValueError("root 不是挂载点，请检查索引范围与 require_mount")
     for key in ("plocate", "updatedb"):
         try:
             version = command([config[key], "--version"]).stdout
@@ -85,7 +86,7 @@ def preflight(config):
         except (OSError, subprocess.SubprocessError) as exc:
             raise ValueError(f"无法运行 {key}；请先准备依赖或修正程序路径") from exc
     help_text = command([config["updatedb"], "--help"]).stdout
-    if config["exclude_paths"] and "--add-single-prunepath" not in help_text:
+    if any(s["exclude_paths"] for s in config.get("sources", [config])) and "--add-single-prunepath" not in help_text:
         raise ValueError("当前 updatedb 不支持逐目录排除参数，请使用兼容的 plocate 版本")
 
 

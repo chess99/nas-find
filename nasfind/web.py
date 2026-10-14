@@ -150,8 +150,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(401, {"error": "请先登录"})
             engine = self.server.engine
             if url.path == "/api/status":
-                return self._json(200, {**engine.status(), "version": __version__, "api_version": API_VERSION,
-                                        "min_client_api_version": MIN_CLIENT_API_VERSION, "capabilities": CAPABILITIES})
+                multi = "sources" in engine.config
+                return self._json(200, {**engine.status(), "version": __version__, "api_version": 2 if multi else API_VERSION,
+                                        "min_client_api_version": 2 if multi else MIN_CLIENT_API_VERSION,
+                                        "capabilities": CAPABILITIES + (["multiple-sources"] if multi else [])})
             if url.path == "/api/directories":
                 return self._json(200, self.server.queries.directories(arg("scope"), arg("offset", "0")))
             if url.path == "/api/search":

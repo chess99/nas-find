@@ -147,6 +147,15 @@ pub async fn reveal_export(
 }
 
 pub fn csv_line(config: &config::Config, path: &str, mapped: Option<&str>) -> String {
+    csv_line_for(config, path, mapped, path)
+}
+
+fn csv_line_for(
+    config: &config::Config,
+    path: &str,
+    mapped: Option<&str>,
+    public_path: &str,
+) -> String {
     let use_drive = config.prefer_drive
         && mapped.is_some_and(|m| m.trim_end_matches('\\').eq_ignore_ascii_case(&config.share));
     let windows = format!(
@@ -166,7 +175,7 @@ pub fn csv_line(config: &config::Config, path: &str, mapped: Option<&str>) -> St
     format!(
         "\"{}\",\"./{}\"\r\n",
         windows.replace('"', "\"\""),
-        path.replace('"', "\"\"")
+        public_path.replace('"', "\"\"")
     )
 }
 
@@ -227,12 +236,19 @@ async fn transfer(
     job: Arc<Job>,
 ) -> Result<(), String> {
     let mut config = session.config.clone();
-    if cfg!(target_os = "macos") && !unc && config.mount_path.is_empty() {
+    if cfg!(target_os = "macos")
+        && !unc
+        && config.sources.is_empty()
+        && config.mount_path.is_empty()
+    {
         return Err("请填写本机 SMB 挂载路径，或选择复制 UNC 路径".into());
     }
     if unc {
         config.prefer_drive = false;
         config.mount_path.clear();
+        for source in &mut config.sources {
+            source.mount_path.clear();
+        }
     }
     // Resolve mapping once for the whole operation, so one export cannot mix roots.
     let mapped = native::mapping(&config.drive);
@@ -249,7 +265,7 @@ async fn transfer(
     };
     if csv {
         if let Some(file) = temporary.as_mut() {
-            let header = if cfg!(target_os = "macos") && !config.mount_path.is_empty() {
+            let header = if cfg!(target_os = "macos") && !unc {
                 "\u{feff}macOS路径,NAS相对路径\r\n"
             } else {
                 "\u{feff}Windows样式路径,NAS相对路径\r\n"
@@ -277,10 +293,27 @@ async fn transfer(
         let mut chunk = String::new();
         for path in paths {
             let path = path.as_str().ok_or("路径响应无效")?;
+            let (local, tail) = config.for_path(path)?;
+            if cfg!(target_os = "macos") && !unc && local.mount_path.is_empty() {
+                return Err(
+                    "请在连接设置中填写所有选中共享的 SMB 挂载路径，或复制 UNC 路径".into(),
+                );
+            }
             let row = if csv {
-                csv_line(&config, path, mapped.as_deref())
+                csv_line_for(&local, &tail, mapped.as_deref(), path)
+            } else if tail.is_empty() && !config.sources.is_empty() {
+                let root = if cfg!(target_os = "macos") && !unc {
+                    &local.mount_path
+                } else {
+                    &local.share
+                };
+                if quoted {
+                    format!("\"{root}\"\r\n")
+                } else {
+                    format!("{root}\r\n")
+                }
             } else {
-                match line(&config, path, mapped.as_deref(), quoted) {
+                match line(&local, &tail, mapped.as_deref(), quoted) {
                     Ok(line) => line,
                     Err(_) => {
                         job.status.lock().unwrap()["needs_csv"] = json!(true);

@@ -17,6 +17,7 @@ Linux 本地目录 → inotify 变化通知 → plocate 索引
 | `version.json`、`scripts/version.mjs` | 统一产品版本、Android 升级序号与各平台字段同步 |
 | `nasfind/config.py` | 服务配置、索引范围和文件访问边界 |
 | `nasfind/watcher.py` | inotify 监听、目录变化与恢复 |
+| `nasfind/sources.py` | 多索引源组合、稳定路径前缀、文件访问路由和查询索引固定 |
 | `nasfind/engine.py` | 索引调度、发布和旧快照保护 |
 | `nasfind/queries.py` | 分类筛选、临时 SQLite 查询快照和批量路径读取 |
 | `nasfind/web.py` | HTTP、登录、文件预览、下载和查询接口 |
@@ -318,3 +319,11 @@ Android 官方 `ProxyFileDescriptorCallback.onRead` 要求：到达文件结尾�
 NAS Find 保留受控只读文件入口，修正其读取与生命周期行为，并提供显式完整副本备用操作；没有在本轮新增本地 HTTP 服务，也未修改 NAS 的文件访问协议。
 
 针对具体用户样本，`MediaHandoffProbe` 还接受 `-e mediaSample file`：测试启动前将 `{"path":"media/sample.mkv","player":"org.videolan.vlc","holdSeconds":60}` 通过 adb stdin 写入调试包私有 `files/media-probe.json`。用例读取后删除输入文件，逐字节比较非对齐跨块读取，再交给指定播放器观察。音频允许退回调用方后后台播放，以实际 MediaSession 播放状态确认持续播放；视频则同时检查播放器仍在前台。所有真实路径、截图和播放会话输出只保留在忽略的本地验证目录，不提交仓库。
+
+### 多共享索引与协议
+
+单共享保留原来的 `Engine`、状态目录与相对路径。配置 `sources` 后使用 `Sources` 组合多个独立引擎，各自监听、发布索引和保留失败前快照；公共查询仅消费索引，结果路径增加稳定的 `<id>/` 前缀。文件访问在去掉来源前缀后交给原有 `Scope.open`，继续使用目录描述符和符号链接边界检查。
+
+查询开始先固定所有所选源的数据库硬链接，再写入同一个 SQLite 查询快照。任一所选源缺少首次索引或查询失败时，查询不能标记完整，也不能复制或导出。查询结束、取消或失败均关闭进程、SQLite 连接并释放硬链接。`tests/test_sources.py` 覆盖跨源同名文件、分页、CSV、来源范围、安全边界、索引缺失及 Linux 独立更新/失败保留；不具备 plocate 环境时，真实索引测试跳过，合成索引字节测试仍运行真实 SQLite、分页与导出流程。
+
+多共享状态声明协议 2、最低客户端协议 2 与 `multiple-sources` 能力；单共享继续声明协议 1。桌面和 Android 支持协议 1/2，旧客户端连接多共享时提示升级，防止桌面沿用单共享前缀打开错误路径。网页/桌面按共享筛选；Android 复用目录浏览协议，将来源前缀作为顶层目录。

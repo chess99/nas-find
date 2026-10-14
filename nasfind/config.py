@@ -10,6 +10,30 @@ from pathlib import Path
 def validate(config):
     if not isinstance(config, dict):
         raise ValueError("配置必须是 JSON 对象")
+    if "sources" in config:
+        sources = config["sources"]
+        if not isinstance(sources, list) or not 1 <= len(sources) <= 32:
+            raise ValueError("sources 必须包含 1–32 个索引源")
+        ids, roots = set(), []
+        for source in sources:
+            if not isinstance(source, dict) or not isinstance(source.get("id"), str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", source["id"]):
+                raise ValueError("索引源 id 只能包含字母、数字、下划线和连字符")
+            if "sources" in source:
+                raise ValueError("索引源不能嵌套 sources")
+            if source["id"].lower() in ids:
+                raise ValueError("索引源 id 不能重复（不区分大小写）")
+            ids.add(source["id"].lower())
+            if "name" in source and (not isinstance(source["name"], str) or not source["name"].strip() or len(source["name"]) > 80):
+                raise ValueError("索引源名称应为 1–80 个字符")
+            validate({k: v for k, v in source.items() if k != "sources"})
+            root = os.path.realpath(os.path.expanduser(source["root"]))
+            if any(os.path.commonpath([root, old]) in (root, old) for old in roots):
+                raise ValueError("索引源目录不能重复或互相包含")
+            roots.append(root)
+        # Validate the common settings through the single-source schema as well.
+        validate({**{k: v for k, v in config.items() if k != "sources"},
+                  "root": sources[0]["root"], "unc_prefix": sources[0]["unc_prefix"]})
+        return
     for key in ("root", "unc_prefix"):
         if not isinstance(config.get(key), str) or not config[key].strip():
             raise ValueError(f"请在配置文件中明确设置 {key}")
@@ -49,6 +73,17 @@ def validate(config):
 
 def normalize(config):
     validate(config)
+    if "sources" in config:
+        common = {k: v for k, v in config.items() if k not in ("sources", "root", "unc_prefix")}
+        normalized = normalize({**common, "root": config["sources"][0]["root"],
+                                "unc_prefix": config["sources"][0]["unc_prefix"]})
+        normalized["sources"] = []
+        for source in config["sources"]:
+            item = normalize({**common, **source})
+            item["name"] = source.get("name", source["id"])
+            item["state_dir"] = str(Path(normalized["state_dir"]) / "sources" / source["id"])
+            normalized["sources"].append(item)
+        return normalized
     defaults = {
         "bind": "127.0.0.1", "port": 8765,
         "require_mount": True,
@@ -105,10 +140,14 @@ def is_mountpoint(path):
 
 class Scope:
     def __init__(self, config):
+        self.unc_prefix = config["unc_prefix"]
         self.root = Path(config["root"])
         self.names = set(config["exclude_names"])
         self.paths = tuple(config["exclude_paths"])
         self.require_mount = config.get("require_mount", True)
+
+    def unc(self, relative):
+        return self.unc_prefix + ("\\" + relative.replace("/", "\\") if relative else "")
 
     def excluded(self, relative):
         parts = relative.split("/")

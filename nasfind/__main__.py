@@ -6,6 +6,7 @@ import threading
 
 from .config import load
 from .engine import Engine
+from .sources import Sources
 from .web import Server
 from . import __version__
 
@@ -18,7 +19,7 @@ def main():
     os.umask(0o077)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     config = load(args.config)
-    engine = Engine(config)
+    engine = Sources(config) if "sources" in config else Engine(config)
     server = Server((config["bind"], config["port"]), engine)
 
     def stop(*_):

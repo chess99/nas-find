@@ -21,7 +21,7 @@
 
 镜像包含 Python 3.12、plocate 和网页，无需在宿主安装这些依赖。需要安装 Docker Engine 与 Compose v2。下面按源码构建部署；镜像构建与发布流程见[开发文档](development.md)。
 
-一个实例索引一个 SMB 共享根目录。准备宿主上的共享数据目录、对应的 SMB 共享根路径，以及索引范围外的独立配置目录。
+一个实例可统一索引多个 SMB 共享。以下先说明单共享安装；多个共享的配置见下方“多个索引共享”。准备宿主上的共享数据目录、对应的 SMB 共享根路径，以及索引范围外的独立配置目录。
 
 在 Linux 上获取源码后执行：
 
@@ -73,6 +73,36 @@ docker compose --env-file .local/docker.env logs --tail=50
 也可以在 Unraid 本机获取源码并执行 `docker build -t nas-find:local .`，然后将模板 Repository 改为 `nas-find:local`，使用本机构建的镜像。
 
 在 Unraid 上，如果通过 SMB 修改文件或 Mover 搬移后搜索结果没有更新，可在网页手动更新；也可停止容器后将 `reconcile_interval` 改为 `3600` 等合适间隔进行定期校验。设置为 `3600` 会每小时检查目录，可能唤醒机械盘；没有触发文件事件的变化会在校验后显示。
+
+### 多个索引共享
+
+多共享功能需要使用包含此功能的新服务端和客户端；0.5.0 安装包不支持。网页随服务端更新。启用多共享后，旧客户端会提示升级。
+
+以 Unraid 的 `/mnt/user/data` 和 `/mnt/user/download` 为例：
+
+1. 停止容器，备份专用配置目录。保留原有 `/config` 映射、密码与索引文件。
+2. 保留第一个只读路径映射 `/mnt/user/data` → `/data`。在 Unraid 编辑容器页面点 **Add another Path, Port, Variable, Label or Device**，新增 **Path**：Host Path 填 `/mnt/user/download`，Container Path 填 `/downloads`，Access Mode 选 **Read Only**。
+3. 展开高级设置，在模板的“多共享索引源（JSON）”中填写下面的数组。旧模板可自行新增同名环境变量 `NAS_FIND_SOURCES`。`root` 填容器路径，`unc_prefix` 填该目录对应的 SMB 共享根路径；替换示例主机名。
+4. 应用配置并启动容器。登录网页，默认在“全部共享”中搜索，也可选择单个共享。
+
+```json
+[
+  {"id":"data","name":"资料","root":"/data","unc_prefix":"\\\\nas.example.internal\\data"},
+  {"id":"download","name":"下载","root":"/downloads","unc_prefix":"\\\\nas.example.internal\\download"}
+]
+```
+
+JSON 中反斜杠需要转义；Unraid 输入框中直接粘贴 JSON，不在整个数组外加引号。可添加更多只读路径映射和索引源，最多 32 个。不同源的本地目录不能重复或互相包含。每个源必须是有效挂载，避免容器路径写错后把空目录当作共享。
+
+也可在停止容器后，给 `/config/config.json` 添加同结构的 `sources` 数组。非空的 `NAS_FIND_SOURCES` 每次启动都会覆盖保存值；环境变量留空时沿用保存的数组。以后编辑文件配置前应清空该环境变量。恢复单共享时，清空环境变量并删除保存配置中的 `sources`，保留原来的 `/data` 映射和 `NAS_FIND_UNC_PREFIX`。
+
+Compose 用户在自己的 `.local/docker.env` 中添加单行 `NAS_FIND_SOURCES='[...]'`，数组内容同上；再给自己的 Compose 文件增加第二个只读 bind mount，目标为 `/downloads`，并设置 `bind.create_host_path: false`。仓库的 `compose.yaml` 已转发该环境变量。保持原有第一共享和 UNC 参数；使用 `up -d` 加载修改。
+
+`id` 是稳定的路径前缀，只支持字母、数字、连字符和下划线，不区分大小写判重。结果例如 `data/照片/a.jpg`、`download/照片/a.jpg`；显示名 `name` 可自由修改。修改 `id` 会建立新的索引并改变相对路径，因此已有 Android 历史目录条件需重新选择。每个源可单独设置 `exclude_names`、`exclude_paths`；排除路径相对于该源，未设置时继承公共配置。
+
+首次从单共享切到多共享时，各源分别建立索引，原单共享索引保留用于回滚。某源首次索引未完成时，“全部共享”查询会提示等待，可先筛选已就绪的共享。已有索引的共享离线时仍可搜索旧结果，预览或打开会报错；其他共享继续独立更新。客户端批量操作只允许完整成功的查询，避免把部分共享的结果当作全部导出。
+
+原生部署使用相同的 `sources` 结构，将 `root` 改为 NAS 上的绝对目录；公共 `state_dir`、密码、访问网段和程序路径仍在顶层配置。原生目录不是独立挂载点时，按实际目录边界设置该源的 `require_mount: false`。源索引位于 `state_dir/sources/<id>/`，应保持 `id` 与共享对应关系稳定。
 
 ### Docker 更新与排障
 

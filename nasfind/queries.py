@@ -3,7 +3,6 @@ import fnmatch
 import csv
 import io
 import json
-import os
 import re
 import secrets
 import sqlite3
@@ -12,7 +11,10 @@ import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from pathlib import Path
+
+from .sources import query_indexes
 
 CATEGORIES = {
     "video": "mp4 mkv avi mov webm m4v mpg mpeg wmv flv mts m2ts vob ogv 3gp",
@@ -74,7 +76,7 @@ class Snapshot:
         self.generation = None
         self.lock = threading.RLock()
         self.pins = 0
-        with sqlite3.connect(self.path) as db:
+        with closing(sqlite3.connect(self.path)) as db, db:
             db.execute("CREATE TABLE results (id INTEGER PRIMARY KEY, path TEXT NOT NULL, directory INTEGER NOT NULL)")
 
     def info(self):
@@ -173,61 +175,78 @@ class Queries:
             raise ValueError("分页参数无效")
         with self.engine.lock:
             directories = self.engine.index_dirs
-        paths = sorted(p for p in directories if p.rpartition("/")[0] == scope and not self.engine.scope.excluded(p))
+        paths = sorted(p for p in directories if p != "." and p.rpartition("/")[0] == scope and not self.engine.scope.excluded(p))
         return {"total": len(paths), "paths": paths[offset:offset + 200]}
 
-    def _build(self, job, terms, scope, extension, category, match_path, recursive=True):
-        started = time.monotonic()
-        timer = None
-        try:
-            if job.cancelled.is_set():
-                raise ValueError("查询已取消")
-            # Hard-link the immutable database while holding the publication lock.
-            database = job.path.with_suffix(".db")
-            with self.engine.lock:
-                if not self.engine.database.exists():
-                    raise ValueError("首次索引尚未完成，请稍后重新查询")
-                os.link(self.engine.database, database)
-                directories = self.engine.index_dirs
-                job.generation = self.engine.metadata.get("finished_at")
-            command = [self.engine.config["plocate"], "-d", str(database), "-i", "-0"]
-            # Path mode matches visible relative paths, not the server's mount prefix.
+    def _records(self, job, indexes, terms, match_path):
+        deadline = time.monotonic() + 120
+        for index in indexes:
+            command = [self.engine.config["plocate"], "-d", str(index["database"]), "-i", "-0"]
+            # Multi-source roots are synthetic folders; emit them from metadata.
+            source = index["prefix"]
+            if source:
+                yield source, True
             if not match_path:
                 command += ["-b"]
-            candidates = terms if not match_path else []
-            command += ["--", *(candidates or [""])]
-            with tempfile.TemporaryFile() as errors, sqlite3.connect(job.path) as db:
-                db.execute("PRAGMA journal_mode=MEMORY")
-                db.execute("PRAGMA synchronous=OFF")
+            command += ["--", *((terms if not match_path else []) or [""])]
+            with tempfile.TemporaryFile() as errors:
                 with job.lock:
                     job.process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=errors)
                     if job.cancelled.is_set():
                         job.process.kill()
-                timer = threading.Timer(120, job.process.kill)
+                timer = threading.Timer(max(0, deadline - time.monotonic()), job.process.kill)
                 timer.start()
-                buffer, batch, count = b"", [], 0
-                prefix = str(self.engine.scope.root).rstrip("/") + "/"
-                while True:
-                    chunk = job.process.stdout.read(65536)
-                    if not chunk:
-                        break
-                    buffer += chunk
-                    parts = buffer.split(b"\0")
-                    buffer = parts.pop()
-                    for raw in parts:
-                        if job.cancelled.is_set():
-                            raise ValueError("查询已取消")
-                        path = raw.decode("utf-8", errors="replace")
-                        if not path.startswith(prefix):
-                            continue
-                        path = path[len(prefix):]
+                try:
+                    buffer = b""
+                    prefix = index["root"] + "/"
+                    while True:
+                        chunk = job.process.stdout.read(65536)
+                        if not chunk:
+                            break
+                        buffer += chunk
+                        parts = buffer.split(b"\0")
+                        buffer = parts.pop()
+                        for raw in parts:
+                            if job.cancelled.is_set():
+                                raise ValueError("查询已取消")
+                            path = raw.decode("utf-8", errors="replace")
+                            if path.startswith(prefix):
+                                relative = path[len(prefix):]
+                                yield (source + "/" if source else "") + relative, relative in index["directories"]
+                    code = job.process.wait()
+                    errors.seek(0)
+                    if job.cancelled.is_set():
+                        raise ValueError("查询已取消")
+                    if code not in (0, 1) or errors.read(1) or buffer:
+                        raise ValueError("查询未能完整完成，请重新查询或缩小范围")
+                finally:
+                    timer.cancel()
+                    with job.lock:
+                        if job.process.poll() is None:
+                            job.process.kill()
+                        job.process.wait()
+                        job.process.stdout.close()
+                        job.process = None
+
+    def _build(self, job, terms, scope, extension, category, match_path, recursive=True):
+        started = time.monotonic()
+        try:
+            if job.cancelled.is_set():
+                raise ValueError("查询已取消")
+            with query_indexes(self.engine, job.path, scope) as indexes, closing(sqlite3.connect(job.path)) as db, db:
+                job.generation = max((index["generation"] or 0 for index in indexes), default=0)
+                db.execute("PRAGMA journal_mode=MEMORY")
+                db.execute("PRAGMA synchronous=OFF")
+                batch, count = [], 0
+                records = self._records(job, indexes, terms, match_path)
+                try:
+                    for path, directory in records:
                         if self.engine.scope.excluded(path) or (scope and not path.startswith(scope + "/")):
                             continue
                         if not recursive and path.rpartition("/")[0] != scope:
                             continue
-                        if match_path and not all(self._matches(path, term) for term in terms):
+                        if not all(self._matches(path if match_path else path.rsplit("/", 1)[-1], term, match_path) for term in terms):
                             continue
-                        directory = path in directories
                         suffix = path.rsplit("/", 1)[-1].rsplit(".", 1)[-1].lower() if "." in path.rsplit("/", 1)[-1] else ""
                         if category == "folder" and not directory:
                             continue
@@ -237,42 +256,34 @@ class Queries:
                             continue
                         batch.append((count, path, int(directory)))
                         count += 1
-                    if batch:
-                        db.executemany("INSERT INTO results VALUES (?, ?, ?)", batch)
-                        db.commit()
-                        batch.clear()
-                        with job.lock:
-                            job.count = count
-                        if job.path.stat().st_size > 512 * 1024 ** 2:
-                            raise ValueError("查询快照超过资源额度，请缩小范围后重试；当前结果不完整")
-                code = job.process.wait()
-                errors.seek(0)
-                if job.cancelled.is_set():
-                    raise ValueError("查询已取消")
-                if code not in (0, 1) or errors.read(1) or buffer:
-                    raise ValueError("查询未能完整完成，请重新查询或缩小范围")
-                with job.lock:
-                    job.milliseconds = round((time.monotonic() - started) * 1000)
-                    job.complete = True
+                        if len(batch) >= 500:
+                            db.executemany("INSERT INTO results VALUES (?, ?, ?)", batch)
+                            db.commit()
+                            batch.clear()
+                            with job.lock:
+                                job.count = count
+                            if job.path.stat().st_size > 512 * 1024 ** 2:
+                                raise ValueError("查询快照超过资源额度，请缩小范围后重试；当前结果不完整")
+                    db.executemany("INSERT INTO results VALUES (?, ?, ?)", batch)
+                    db.commit()
+                    with job.lock:
+                        job.count = count
+                        job.complete = True
+                finally:
+                    records.close()
         except Exception as exc:
             with job.lock:
                 job.error = str(exc)
         finally:
-            if timer:
-                timer.cancel()
             with job.lock:
-                if job.process is not None:
-                    if job.process.poll() is None:
-                        job.process.kill()
-                    job.process.wait()
-                    job.process.stdout.close()
                 job.milliseconds = round((time.monotonic() - started) * 1000)
-            job.path.with_suffix(".db").unlink(missing_ok=True)
             job.finished.set()
 
     @staticmethod
-    def _matches(path, term):
-        path, term = path.lower(), term.lower().replace("\\", "/")
+    def _matches(path, term, match_path=True):
+        path, term = path.lower(), term.lower()
+        if match_path:
+            term = term.replace("\\", "/")
         return fnmatch.fnmatchcase(path, term) if any(c in term for c in "*?[") else term in path
 
     def get(self, owner, key):
@@ -292,7 +303,7 @@ class Queries:
         with self.lock:
             job = self.get(owner, key)
             info = job.info()
-            with sqlite3.connect(job.path) as db:
+            with closing(sqlite3.connect(job.path)) as db, db:
                 rows = db.execute("SELECT id,path,directory FROM results WHERE id>=? AND id<? ORDER BY id", (offset, min(offset + limit, info["total"]))).fetchall()
         return {**info, "offset": offset, "results": [{"index": i, "path": p, "name": p.rsplit("/", 1)[-1], "directory": bool(d)} for i, p, d in rows]}
 
@@ -306,7 +317,7 @@ class Queries:
             if type(cursor) is not int or cursor < 0 or cursor > job.count:
                 raise ValueError("读取位置无效")
             rows = []
-            with sqlite3.connect(job.path) as db:
+            with closing(sqlite3.connect(job.path)) as db, db:
                 for a, b in ranges:
                     if b <= cursor:
                         continue
@@ -340,7 +351,7 @@ class Queries:
                     for relative in batch["paths"]:
                         if not csv_mode and any(c in relative for c in "\r\n\0\\"):
                             raise ValueError("部分名称包含换行或反斜杠，请改用 CSV 完整清单")
-                        line = self.engine.config["unc_prefix"] + "\\" + relative.replace("/", "\\")
+                        line = self.engine.scope.unc(relative)
                         if csv_mode:
                             buffer = io.StringIO(newline="")
                             csv.writer(buffer).writerow([line, "./" + relative])

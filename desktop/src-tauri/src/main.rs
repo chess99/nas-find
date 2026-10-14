@@ -71,7 +71,7 @@ async fn decode(response: reqwest::Response) -> Result<Value, String> {
 }
 
 fn check_api_compatibility(value: &Value) -> Result<(), String> {
-    if value["min_client_api_version"].as_u64().unwrap_or(1) > 1 {
+    if value["min_client_api_version"].as_u64().unwrap_or(1) > 2 {
         return Err("服务器需要新版客户端，请更新 NAS Find".into());
     }
     if value["api_version"].as_u64().unwrap_or(1) < 1 {
@@ -87,7 +87,13 @@ async fn login(config: Config, password: String) -> Result<Session, String> {
         .json(&json!({"password": password}))
         .send()
         .await
-        .map_err(|error| if error.is_timeout() { "连接 NAS 超时，请检查网络与服务是否运行" } else { "无法连接 NAS，请检查服务地址、网络与系统局域网权限" })?;
+        .map_err(|error| {
+            if error.is_timeout() {
+                "连接 NAS 超时，请检查网络与服务是否运行"
+            } else {
+                "无法连接 NAS，请检查服务地址、网络与系统局域网权限"
+            }
+        })?;
     if response.status().as_u16() == 401 {
         return Err("密码不正确".into());
     }
@@ -127,8 +133,11 @@ async fn connect(
     password: String,
     state: State<'_, AppState>,
 ) -> Result<Value, String> {
-    let config = config.validated()?;
+    let mut config = config.validated()?;
     let saved = state.stored.lock().unwrap().clone();
+    if saved.config.server != config.server {
+        config.sources.clear();
+    }
     let password = if password.is_empty() && saved.config.server == config.server {
         let encrypted = saved.password.as_ref().ok_or("请输入访问密码")?;
         String::from_utf8(native::protect(encrypted, true)?)
@@ -139,7 +148,7 @@ async fn connect(
     if password.is_empty() {
         return Err("请输入访问密码".into());
     }
-    let session = login(config.clone(), password.clone()).await?;
+    let mut session = login(config.clone(), password.clone()).await?;
     let result = session
         .client
         .get(format!("{}/api/status", config.server))
@@ -147,6 +156,8 @@ async fn connect(
         .await
         .map_err(|_| "无法读取索引状态")?;
     let status = decode(result).await?;
+    config = config.with_sources(&status)?;
+    session.config = config.clone();
     let encrypted = Some(native::protect(password.as_bytes(), false)?);
     state.save(&Stored {
         config: config.clone(),
@@ -291,6 +302,7 @@ async fn file_action(
     let result = tauri::async_runtime::spawn_blocking(move || {
         let mapped = native::mapping(&config.drive);
         let (resolved, fallback) = config.resolve(&path, mapped.as_deref())?;
+        let (config, path) = config.for_path(&path)?;
         #[cfg(target_os = "macos")]
         if matches!(
             action.as_str(),
@@ -301,7 +313,11 @@ async fn file_action(
         match action.as_str() {
             "copy_path" => native::clipboard(&resolved, false, owner)?,
             "copy_unc" => native::clipboard(
-                &format!("{}\\{}", config.share, config::relative(&path)?),
+                &if path.is_empty() {
+                    config.share.clone()
+                } else {
+                    format!("{}\\{}", config.share, config::relative(&path)?)
+                },
                 false,
                 owner,
             )?,
@@ -513,8 +529,11 @@ mod protocol_tests {
     #[test]
     fn product_versions_do_not_gate_compatible_protocols() {
         assert!(check_api_compatibility(&json!({})).is_ok());
-        assert!(check_api_compatibility(&json!({"version":"9.0.0","api_version":2,"min_client_api_version":1})).is_ok());
-        assert!(check_api_compatibility(&json!({"min_client_api_version":2})).is_err());
+        assert!(check_api_compatibility(
+            &json!({"version":"9.0.0","api_version":2,"min_client_api_version":2})
+        )
+        .is_ok());
+        assert!(check_api_compatibility(&json!({"min_client_api_version":3})).is_err());
         assert!(check_api_compatibility(&json!({"api_version":0})).is_err());
     }
 }

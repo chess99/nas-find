@@ -1,6 +1,7 @@
 import contextlib
 import importlib.util
 import io
+import os
 import json
 from pathlib import Path
 import tempfile
@@ -66,11 +67,33 @@ class ContainerSetupTests(unittest.TestCase):
                 entrypoint.prepare(self.directory, environ)
         self.assertFalse((self.directory / "password").exists())
 
+    def test_sources_environment_and_invalid_update_preserve_credentials(self):
+        sources = [{"id": "data", "root": "/data", "unc_prefix": r"\\nas-test\data"},
+                   {"id": "download", "root": "/downloads", "unc_prefix": r"\\nas-test\download"}]
+        path = self.prepare({"NAS_FIND_SOURCES": json.dumps(sources), "NAS_FIND_ALLOWED_NETWORKS": "192.0.2.0/24"})
+        config = json.loads(path.read_text())
+        self.assertEqual(len(config["sources"]), 2)
+        self.assertTrue(all(s["require_mount"] and not s["prune_bind_mounts"] for s in config["sources"]))
+        previous = path.read_bytes(), (self.directory / "password").read_bytes()
+        with self.assertRaises(ValueError):
+            self.prepare({"NAS_FIND_SOURCES": "[]"})
+        self.assertEqual(previous, (path.read_bytes(), (self.directory / "password").read_bytes()))
+        if os.name == "posix":
+            self.prepare({})
+            self.assertEqual(config, json.loads(path.read_text()))
+
     def test_invalid_existing_password_is_not_reset(self):
         (self.directory / "password").write_text("short")
         with self.assertRaisesRegex(ValueError, "12"):
             entrypoint.prepare(self.directory, self.env)
         self.assertEqual((self.directory / "password").read_text(), "short")
+
+    def test_missing_mount_never_publishes_new_settings(self):
+        path = self.prepare()
+        before = path.read_bytes(), (self.directory / "password").read_bytes()
+        with patch.object(entrypoint, "is_mountpoint", return_value=False), self.assertRaises(ValueError):
+            entrypoint.prepare(self.directory, {**self.env, "NAS_FIND_UNC_PREFIX": r"\\nas-test\other"}, check_mounts=True)
+        self.assertEqual(before, (path.read_bytes(), (self.directory / "password").read_bytes()))
 
 
 class BindMountTests(unittest.TestCase):

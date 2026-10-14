@@ -11,6 +11,7 @@ services:
       PUID: ${PUID:?请填写运行用户 UID}
       PGID: ${PGID:?请填写运行用户 GID}
       NAS_FIND_UNC_PREFIX: ${NAS_FIND_UNC_PREFIX:?请填写 SMB 共享根路径}
+      NAS_FIND_SOURCES: ${NAS_FIND_SOURCES:-}
       NAS_FIND_ALLOWED_NETWORKS: ${NAS_FIND_ALLOWED_NETWORKS:?请填写允许访问的局域网网段}
     volumes:
       - type: bind

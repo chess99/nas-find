@@ -1,9 +1,9 @@
 import {Explorer} from './shared/explorer.js';
 import {drawConnection,canShare} from './connection-share.js';
 const $=id=>document.getElementById(id),invoke=(command,args={})=>window.__TAURI__.core.invoke(command,args);
-let toastTimer,connected=false,poll,isMac=false,savedServer='',remembered=false,shareGeneration=0;
+let toastTimer,connected=false,poll,isMac=false,savedServer='',remembered=false,shareGeneration=0,sourceConfigs=[];
 function toast(text){clearTimeout(toastTimer);$('toast').textContent=text;$('toast').classList.remove('hidden');toastTimer=setTimeout(()=>$('toast').classList.add('hidden'),4000);}
-function updateStatus(value){$('server-version').textContent=value.version?' · 服务器 '+value.version:'';$('index-status').textContent=`${Number(value.entries||0).toLocaleString()} 个索引条目 · ${value.scanning?'正在更新':value.dirty?'有待更新变化':'索引已就绪'}`;$('refresh-index').disabled=value.scanning;$('dot').classList.add('connected');}
+function updateStatus(value){explorer.setSources(value.sources||[]);$('server-version').textContent=value.version?' · 服务器 '+value.version:'';$('index-status').title=value.error||'';$('index-status').textContent=`${Number(value.entries||0).toLocaleString()} 个索引条目 · ${value.error?'部分索引异常':!value.available?'首次索引未完成':value.partial?'部分共享正在建立索引':value.scanning?'正在更新':value.dirty?'有待更新变化':'索引已就绪'}`;$('refresh-index').disabled=value.scanning;$('dot').classList.add('connected');}
 const explorer=new Explorer($('explorer'),{
   create:options=>invoke('create_query',{options}),page:(id,offset)=>invoke('query_page',{id,offset}),cancel:id=>invoke('cancel_query',{id}),notify:toast,
   startBulk:options=>invoke('start_bulk',options),bulkStatus:id=>invoke('bulk_status',{id}),cancelBulk:id=>invoke('cancel_bulk',{id}),
@@ -17,6 +17,19 @@ const explorer=new Explorer($('explorer'),{
     else if(result.fallback)toast('映射盘不可用，本次使用 UNC 共享路径');
   }
 });
+function renderSources(config){
+  sourceConfigs=config.sources||[];
+  $('single-share-settings').hidden=sourceConfigs.length>0;
+  const list=$('source-settings');list.replaceChildren();list.hidden=!sourceConfigs.length;
+  for(const source of sourceConfigs){
+    const row=document.createElement('div');row.className='source-setting';
+    const name=document.createElement('strong');name.textContent=source.name;
+    const share=document.createElement('p');share.className='help';share.textContent=source.share;
+    row.append(name,share);
+    if(isMac){const label=document.createElement('label');label.textContent='本机 SMB 挂载路径';const input=document.createElement('input');input.value=source.mount_path||'';input.placeholder='/Volumes/'+source.share.split('\\').at(-1);input.oninput=()=>source.mount_path=input.value;label.append(input);row.append(label);}
+    list.append(row);
+  }
+}
 function updateShare(){
   const eligible=canShare({connected,remembered,savedServer,server:$('server').value,password:$('password').value});
   $('share-connection').hidden=!savedServer;$('share-connection').disabled=!eligible;
@@ -35,9 +48,9 @@ async function showShare(){
 function settings(){ $('settings-error').textContent='';updateShare();if(!$('settings-dialog').open)$('settings-dialog').showModal(); }
 async function connect(event){
   event?.preventDefault();closeShare();$('connect').disabled=true;$('connect').textContent='正在连接…';$('settings-error').textContent='';explorer.setConnected(false);connected=false;updateShare();
-  try{const result=await invoke('connect',{config:{server:$('server').value,share:$('share').value,drive:$('drive').value,mount_path:$('mount-path').value,prefer_drive:$('prefer-drive').checked},password:$('password').value});
-    $('password').value='';$('password').placeholder='已安全保存；留空使用保存的密码';savedServer=result.config.server;remembered=true;$('server').value=savedServer;$('settings-dialog').close();connected=true;updateShare();explorer.setConnected(true);$('connection').textContent='已连接 NAS';updateStatus(result.status);
-    $('path-mode').textContent=isMac?`打开位置 ${result.config.mount_path||'请设置 SMB 挂载路径'}`:result.config.prefer_drive&&result.mapping?.toLowerCase()===result.config.share.toLowerCase()?`打开位置 ${result.config.drive}\\`:'打开位置 UNC 共享';
+  try{const result=await invoke('connect',{config:{server:$('server').value,share:$('share').value,drive:$('drive').value,mount_path:$('mount-path').value,prefer_drive:$('prefer-drive').checked,sources:sourceConfigs},password:$('password').value});
+    renderSources(result.config);$('share').value=result.config.share;$('password').value='';$('password').placeholder='已安全保存；留空使用保存的密码';savedServer=result.config.server;remembered=true;$('server').value=savedServer;$('settings-dialog').close();connected=true;updateShare();explorer.setConnected(true);$('connection').textContent='已连接 NAS';updateStatus(result.status);
+    $('path-mode').textContent=result.config.sources?.length?`${result.config.sources.length} 个共享 · ${isMac?(result.config.sources.some(s=>!s.mount_path)?'请在连接设置中填写共享挂载路径':'按共享挂载位置打开'):'按所属共享打开'}`:isMac?`打开位置 ${result.config.mount_path||'请设置 SMB 挂载路径'}`:result.config.prefer_drive&&result.mapping?.toLowerCase()===result.config.share.toLowerCase()?`打开位置 ${result.config.drive}\\`:'打开位置 UNC 共享';
     explorer.search();explorer.$('query').focus();clearInterval(poll);poll=setInterval(async()=>{if(!connected||document.hidden)return;try{updateStatus(await invoke('status'));}catch(e){$('connection').textContent='连接暂时中断';if(String(e).includes('登录已失效')){connected=false;closeShare();explorer.setConnected(false);settings();$('settings-error').textContent=String(e);}}},30000);
   }catch(e){$('settings-error').textContent=String(e);if(!$('settings-dialog').open)$('settings-dialog').showModal();}
   finally{$('connect').disabled=false;$('connect').textContent='保存并连接';}
@@ -48,5 +61,5 @@ $('share-connection').onclick=showShare;$('close-connection-qr').onclick=()=>clo
 $('connection-qr-dialog').addEventListener('cancel',event=>{event.preventDefault();closeShare(true);});
 for(const id of ['server','password'])$(id).addEventListener('input',()=>{updateShare();closeShare();});
 $('refresh-index').onclick=async()=>{try{await invoke('refresh_index');toast('已安排索引更新');}catch(e){toast(String(e));}};
-async function start(){try{const value=await invoke('bootstrap');$('client-version').textContent='客户端 '+value.version;isMac=value.platform==='macos';explorer.api.platform=value.platform;if(isMac){explorer.api.systemMenu=null;$('mount-setting').hidden=false;document.querySelector('.mapping').hidden=true;document.querySelector('.platform-help').textContent='先在 Finder 中连接 SMB 服务器，再填写对应共享的本机挂载路径。SMB 登录与搜索服务密码独立。';explorer.root.querySelector('kbd').textContent='⌘ F';explorer.updateSelection();}const c=value.config;$('mount-path').value=c.mount_path||'';$('server').value=c.server;$('share').value=c.share;$('drive').value=c.drive;$('prefer-drive').checked=c.prefer_drive;savedServer=c.server;remembered=value.remembered;updateShare();if(value.remembered)await connect();else settings();}catch(e){toast(String(e));}}
+async function start(){try{const value=await invoke('bootstrap');$('client-version').textContent='客户端 '+value.version;isMac=value.platform==='macos';explorer.api.platform=value.platform;if(isMac){explorer.api.systemMenu=null;$('mount-setting').hidden=false;document.querySelector('.mapping').hidden=true;document.querySelector('.platform-help').textContent='先在 Finder 中连接 SMB 服务器，再填写对应共享的本机挂载路径。SMB 登录与搜索服务密码独立。';explorer.root.querySelector('kbd').textContent='⌘ F';explorer.updateSelection();}const c=value.config;renderSources(c);$('mount-path').value=c.mount_path||'';$('server').value=c.server;$('share').value=c.share;$('drive').value=c.drive;$('prefer-drive').checked=c.prefer_drive;savedServer=c.server;remembered=value.remembered;updateShare();if(value.remembered)await connect();else settings();}catch(e){toast(String(e));}}
 start();

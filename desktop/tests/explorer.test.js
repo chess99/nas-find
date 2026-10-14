@@ -1,6 +1,28 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {Explorer} from '../src/shared/explorer.js';
+import {Explorer,scopedPath,uncPath} from '../src/shared/explorer.js';
+
+test('source filters and UNC paths keep identical names in different shares distinct', () => {
+  const sources=[{id:'data',unc_prefix:'\\\\nas\\data'},{id:'download',unc_prefix:'\\\\nas\\download'}];
+  assert.equal(scopedPath('data','folder\\child'),'data/folder/child');
+  assert.equal(scopedPath('data',''),'data');
+  assert.equal(scopedPath('','folder'),'folder');
+  assert.equal(uncPath('data/same.txt','',sources),'\\\\nas\\data\\same.txt');
+  assert.equal(uncPath('download/same.txt','',sources),'\\\\nas\\download\\same.txt');
+  assert.equal(uncPath('data','',sources),'\\\\nas\\data');
+  assert.equal(uncPath('folder/same.txt','\\\\nas\\files'),'\\\\nas\\files\\folder\\same.txt');
+  assert.throws(()=>uncPath('other/file.txt','',sources));
+});
+
+test('entering a result folder selects its source and keeps only its local directory', () => {
+  const controls={source:{value:''},scope:{value:''}};
+  const view=Object.assign(Object.create(Explorer.prototype),{sources:[{id:'download'}],$:key=>controls[key]});
+  view.setScope('download/folder');
+  assert.equal(controls.source.value,'download');
+  assert.equal(controls.scope.value,'folder');
+  view.setScope('download');
+  assert.equal(controls.scope.value,'');
+});
 
 function viewport(total, top) {
   return Object.assign(Object.create(Explorer.prototype), {

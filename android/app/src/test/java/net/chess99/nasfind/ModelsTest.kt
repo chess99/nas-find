@@ -39,14 +39,15 @@ class ModelsTest {
         }
     }
     @Test fun usableOldIndexRemainsSearchableDuringFailure() {
+        assertEquals("部分共享正在建立索引", IndexStatus(available = true, partial = true).label)
         assertEquals("更新失败，可搜索", IndexStatus(available = true, error = "failed").label)
         assertEquals("索引不可用", IndexStatus(error = "failed").label)
         assertEquals("更新中，可搜索", IndexStatus(available = true, scanning = true).label)
     }
     @org.junit.Test fun compatibilityUsesProtocolRatherThanProductVersion() {
         IndexStatus.from(org.json.JSONObject()).checkCompatibility()
-        IndexStatus(serverVersion = "9.0.0", apiVersion = 2, minClientApiVersion = 1).checkCompatibility()
-        org.junit.Assert.assertThrows(CompatibilityException::class.java) { IndexStatus(minClientApiVersion = 2).checkCompatibility() }
+        IndexStatus(serverVersion = "9.0.0", apiVersion = 2, minClientApiVersion = 2).checkCompatibility()
+        org.junit.Assert.assertThrows(CompatibilityException::class.java) { IndexStatus(minClientApiVersion = 3).checkCompatibility() }
         org.junit.Assert.assertThrows(CompatibilityException::class.java) { IndexStatus(apiVersion = 0).checkCompatibility() }
     }
 }

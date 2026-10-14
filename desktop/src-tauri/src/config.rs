@@ -8,6 +8,16 @@ pub struct Config {
     pub share: String,
     pub drive: String,
     pub prefer_drive: bool,
+    pub sources: Vec<Source>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct Source {
+    pub id: String,
+    pub name: String,
+    pub share: String,
+    pub mount_path: String,
 }
 
 impl Default for Config {
@@ -18,6 +28,7 @@ impl Default for Config {
             share: String::new(),
             drive: String::new(),
             prefer_drive: false,
+            sources: Vec::new(),
         }
     }
 }
@@ -73,8 +84,8 @@ impl Config {
     }
 
     pub fn validated(mut self) -> Result<Self, String> {
-        if self.server.trim().is_empty() || self.share.trim().is_empty() {
-            return Err("请填写搜索服务地址和 Samba 共享根路径".into());
+        if self.server.trim().is_empty() {
+            return Err("请填写搜索服务地址".into());
         }
         let server = url::Url::parse(self.server.trim()).map_err(|_| "服务地址格式不正确")?;
         if !matches!(server.scheme(), "http" | "https")
@@ -89,19 +100,21 @@ impl Config {
         }
         self.server = server.as_str().trim_end_matches('/').into();
         self.share = self.share.trim().trim_end_matches('\\').into();
-        let tail = self
-            .share
-            .strip_prefix(r"\\")
-            .ok_or("共享路径应为 \\\\服务器\\共享名")?;
-        let parts: Vec<_> = tail.split('\\').collect();
-        if parts.len() != 2
-            || parts[0].is_empty()
-            || matches!(parts[0], "." | "?")
-            || parts[0].chars().any(|c| c < ' ' || "/:<>\"|?*".contains(c))
-        {
-            return Err("请输入共享根路径，例如 \\\\nas.example.internal\\files".into());
+        if !self.share.is_empty() {
+            let tail = self
+                .share
+                .strip_prefix(r"\\")
+                .ok_or("共享路径应为 \\\\服务器\\共享名")?;
+            let parts: Vec<_> = tail.split('\\').collect();
+            if parts.len() != 2
+                || parts[0].is_empty()
+                || matches!(parts[0], "." | "?")
+                || parts[0].chars().any(|c| c < ' ' || "/:<>\"|?*".contains(c))
+            {
+                return Err("请输入共享根路径，例如 \\\\nas.example.internal\\files".into());
+            }
+            relative(parts[1])?;
         }
-        relative(parts[1])?;
         #[cfg(target_os = "macos")]
         {
             self.prefer_drive = false;
@@ -142,7 +155,107 @@ impl Config {
         Ok(self)
     }
 
+    pub fn with_sources(mut self, status: &serde_json::Value) -> Result<Self, String> {
+        let previous = self.sources.clone();
+        self.sources.clear();
+        if let Some(sources) = status["sources"].as_array() {
+            if sources.is_empty() || sources.len() > 32 {
+                return Err("服务器索引源配置无效".into());
+            }
+            for source in sources {
+                let id = source["id"].as_str().ok_or("索引源标识无效")?;
+                if id.is_empty()
+                    || !id
+                        .bytes()
+                        .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
+                    || self.sources.iter().any(|s| s.id.eq_ignore_ascii_case(id))
+                {
+                    return Err("索引源标识无效".into());
+                }
+                let share = source["unc_prefix"].as_str().ok_or("索引源共享路径无效")?;
+                let mount_path = previous
+                    .iter()
+                    .find(|s| s.id == id && s.share.eq_ignore_ascii_case(share))
+                    .map(|s| s.mount_path.clone())
+                    .unwrap_or_else(|| {
+                        if self.share.eq_ignore_ascii_case(share) {
+                            self.mount_path.clone()
+                        } else {
+                            String::new()
+                        }
+                    });
+                let checked = Config {
+                    share: share.into(),
+                    mount_path,
+                    drive: String::new(),
+                    prefer_drive: false,
+                    sources: Vec::new(),
+                    ..self.clone()
+                }
+                .validated()?;
+                if checked.share.is_empty() {
+                    return Err("索引源共享路径为空".into());
+                }
+                self.sources.push(Source {
+                    id: id.into(),
+                    name: source["name"].as_str().unwrap_or(id).into(),
+                    share: checked.share,
+                    mount_path: checked.mount_path,
+                });
+            }
+            self.share.clear();
+            self.mount_path.clear();
+            self.drive.clear();
+            self.prefer_drive = false;
+        } else if self.share.is_empty() {
+            self.share = status["unc_prefix"]
+                .as_str()
+                .ok_or("请填写 Samba 共享根路径")?
+                .into();
+        }
+        self.validated()
+    }
+
+    pub fn for_path(&self, path: &str) -> Result<(Self, String), String> {
+        if self.sources.is_empty() {
+            return Ok((self.clone(), path.into()));
+        }
+        let (id, tail) = path.split_once('/').unwrap_or((path, ""));
+        if path.ends_with('/') {
+            return Err("文件路径无效".into());
+        }
+        let source = self
+            .sources
+            .iter()
+            .find(|s| s.id == id)
+            .ok_or("索引源已变化，请重新连接")?;
+        Ok((
+            Config {
+                server: self.server.clone(),
+                share: source.share.clone(),
+                mount_path: source.mount_path.clone(),
+                drive: String::new(),
+                prefer_drive: false,
+                sources: Vec::new(),
+            },
+            tail.into(),
+        ))
+    }
+
     pub fn resolve(&self, path: &str, mapping: Option<&str>) -> Result<(String, bool), String> {
+        if !self.sources.is_empty() {
+            let (config, tail) = self.for_path(path)?;
+            if tail.is_empty() {
+                if cfg!(target_os = "macos") {
+                    if config.mount_path.is_empty() {
+                        return Err("请在连接设置中填写此共享的 SMB 挂载路径".into());
+                    }
+                    return Ok((config.mount_path, false));
+                }
+                return Ok((config.share, false));
+            }
+            return config.resolve(&tail, None);
+        }
         #[cfg(target_os = "macos")]
         {
             let _ = mapping;
@@ -156,6 +269,9 @@ impl Config {
         }
         #[cfg(windows)]
         {
+            if self.share.is_empty() {
+                return Err("请先连接 NAS 以读取共享配置".into());
+            }
             let tail = relative(path)?;
             let use_drive = self.prefer_drive
                 && mapping
@@ -174,6 +290,7 @@ pub fn fixture() -> Config {
         share: r"\\nas.example.internal\files".into(),
         drive: "Z:".into(),
         prefer_drive: true,
+        sources: Vec::new(),
     }
 }
 
@@ -195,6 +312,54 @@ pub fn live_config(access: Option<&serde_json::Value>) -> Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn multiple_sources_route_same_names_and_preserve_matching_mounts() {
+        let status = serde_json::json!({"sources":[
+            {"id":"data","name":"资料","unc_prefix":r"\\nas-test\data"},
+            {"id":"download","name":"下载","unc_prefix":r"\\nas-test\download"}]});
+        let mut config = fixture().with_sources(&status).unwrap();
+        config.sources[0].mount_path = "/Volumes/data".into();
+        config.sources[1].mount_path = "/Volumes/download".into();
+        let restored = config.clone().with_sources(&status).unwrap();
+        assert_eq!(restored.sources[0].mount_path, "/Volumes/data");
+        for path in [
+            "unknown/file.txt",
+            "data/../file.txt",
+            "data//file.txt",
+            "data/",
+        ] {
+            assert!(restored.resolve(path, None).is_err());
+        }
+        #[cfg(windows)]
+        {
+            assert_eq!(
+                restored
+                    .resolve("data/same.txt", Some(&config.share))
+                    .unwrap()
+                    .0,
+                r"\\nas-test\data\same.txt"
+            );
+            assert_eq!(
+                restored.resolve("download/same.txt", None).unwrap().0,
+                r"\\nas-test\download\same.txt"
+            );
+            assert_eq!(
+                restored.resolve("data", None).unwrap().0,
+                r"\\nas-test\data"
+            );
+        }
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            restored.resolve("download/same.txt", None).unwrap().0,
+            "/Volumes/download/same.txt"
+        );
+        let changed = serde_json::json!({"sources":[{"id":"data","unc_prefix":r"\\other\data"}]});
+        assert!(restored.with_sources(&changed).unwrap().sources[0]
+            .mount_path
+            .is_empty());
+        let bad = serde_json::json!({"sources":[{"id":"data","unc_prefix":r"\\?\C:"}]});
+        assert!(fixture().with_sources(&bad).is_err());
+    }
     #[test]
     fn path_boundaries_and_unicode() {
         assert_eq!(
@@ -268,7 +433,7 @@ mod tests {
             serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
         assert_eq!(restored.validated().unwrap().share, saved.share);
         let old_access = serde_json::json!({"url": saved.server});
-        assert!(Config::import_connection(&Config::default(), &old_access).is_err());
+        assert!(Config::import_connection(&Config::default(), &old_access).is_ok());
         let migrated = Config::import_connection(&saved, &old_access).unwrap();
         assert_eq!(migrated.drive, "Z:");
         let incoming = serde_json::json!({"client_config":{"server":saved.server,"share":saved.share,"prefer_drive":false}});
