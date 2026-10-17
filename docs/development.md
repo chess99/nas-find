@@ -241,6 +241,15 @@ macOS 使用 `native_macos.rs`，Windows 原生模块和依赖按平台编译。
 
 本地构建默认使用 ad-hoc 签名，没有 Apple 开发者签名与公证。公开分发前需配置签名及公证。直接在本机构建运行不需要开发者账号。需要 Finder 显示简介时，系统可能请求自动化权限。
 
+本地更新应先退出客户端并备份旧应用，再将新构建替换到固定的安装位置（例如 `~/Applications/NAS Find.app`），从安装位置重新启动。构建目录与安装目录中的副本使用相同 bundle ID，共用设置和钥匙串凭据，不应交替运行来验证连接。ad-hoc 重建会改变代码签名哈希；macOS 可能残留旧进程的局域网授权或应用注册信息，出现“权限开关已开启、浏览器能访问 NAS，但客户端仍连接失败”的情况。先确认地址和端口确实可达，检查“系统设置 → 隐私与安全性 → 局域网”中的客户端授权，再退出所有客户端副本，更新安装版并重新注册、启动。不要为此清除连接设置、钥匙串或 NAS 索引。
+
+需要刷新应用注册时，使用实际安装路径；以下示例适用于安装在当前用户 Applications 目录的应用：
+
+```sh
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$HOME/Applications/NAS Find.app"
+open "$HOME/Applications/NAS Find.app"
+```
+
 在退出客户端后，可显式导入被忽略的连接文件：
 
 ```sh
