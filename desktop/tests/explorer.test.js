@@ -50,3 +50,22 @@ test('polling while WebKit bounces above the first row requests page zero', asyn
   await view.poll();
   assert.deepEqual(offsets, [0]);
 });
+
+test('macOS single-file menu offers an explicit application choice', async () => {
+  let items, action;
+  const view = Object.assign(Object.create(Explorer.prototype), {
+    total: 1, ready: true,
+    selection: {count: () => 1},
+    api: {platform: 'macos', menu: async value => { items = value; }},
+    singleAction: value => { action = value; },
+  });
+  await view.menu();
+  const openWith = items.find(item => item.text === '打开方式…');
+  assert.ok(openWith);
+  openWith.action();
+  assert.equal(action, 'open_with');
+
+  view.selection.count = () => 2;
+  await view.menu();
+  assert.equal(items.some(item => item.text === '打开方式…'), false);
+});

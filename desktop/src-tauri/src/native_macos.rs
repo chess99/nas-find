@@ -90,6 +90,46 @@ fn script(language: &str, script: &str, argument: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn open_with(path: &str) -> Result<(), String> {
+    if !std::path::Path::new(path).is_file() {
+        return Err("请选择一个可访问的文件".into());
+    }
+    // Standard Additions supplies the native application chooser. Cancellation
+    // returns no selection; file associations are never changed.
+    let result = Command::new("/usr/bin/osascript")
+        .args([
+            "-e",
+            r#"on run
+    activate
+    try
+        set chosenApplication to choose application with prompt "选择用于打开文件的应用（仅本次）" as alias
+        return POSIX path of chosenApplication
+    on error number -128
+        return ""
+    end try
+end run"#,
+        ])
+        .output()
+        .map_err(|_| "无法显示应用选择器")?;
+    if !result.status.success() {
+        return Err("应用选择未能完成，请重试".into());
+    }
+    let application = std::str::from_utf8(&result.stdout).map_err(|_| "所选应用路径无效")?;
+    let application = application.strip_suffix('\n').unwrap_or(application);
+    if application.is_empty() {
+        return Ok(());
+    }
+    let status = Command::new("/usr/bin/open")
+        .args(["-a", application, "--", path])
+        .status()
+        .map_err(|_| "无法使用所选应用打开文件")?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err("所选应用无法打开文件，请尝试其他应用或检查共享连接".into())
+    }
+}
+
 pub fn shell_action(path: &str, action: &str, _: isize) -> Result<(), String> {
     match action {
         "open" | "reveal" => {
@@ -118,7 +158,7 @@ pub fn shell_action(path: &str, action: &str, _: isize) -> Result<(), String> {
 end run"#,
             path,
         ),
-        "open_with" => Err("请先在 Finder 中定位文件，再使用 Finder 的“打开方式”菜单".into()),
+        "open_with" => open_with(path),
         _ => Err("不支持的文件操作".into()),
     }
 }

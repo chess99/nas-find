@@ -127,7 +127,6 @@ export class Explorer {
     if(single)items.push({text:'打开',action:()=>this.singleAction('open')},{text:'打开所在位置',action:()=>this.singleAction('reveal')},{text:'打开方式…',action:()=>this.singleAction('open_with')},{text:'复制文件',action:()=>this.singleAction('copy_file')},{separator:true});
     items.push({text:`复制路径${count>1?`（${count.toLocaleString()} 项）`:''}`,enabled:this.ready,action:()=>this.bulk('clipboard')},{text:'复制带引号的路径',enabled:this.ready,action:()=>this.bulk('clipboard',{quoted:true})},{text:'复制 UNC 路径',enabled:this.ready,action:()=>this.bulk('clipboard',{unc:true})},{text:'导出 TXT 路径清单',enabled:this.ready,action:()=>this.bulk('export')},{text:'导出 CSV 完整清单',enabled:this.ready,action:()=>this.bulk('export',{format:'csv'})});
     if(single)items.push({separator:true},{text:'属性 / 详情',action:()=>this.singleAction('properties')},{text:'在此目录内搜索',action:async()=>{const f=await this.selectedFile();this.setScope(f.directory?f.path:f.path.slice(0,Math.max(0,f.path.lastIndexOf('/'))));this.search();}});
-    if(this.api.platform==='macos'){const index=items.findIndex(item=>item.text==='打开方式…');if(index>=0)items.splice(index,1);}
     if(this.api.systemMenu){const request={id:this.id,selection:this.selection.payload()};items.push({separator:true},{text:'系统右键菜单…',enabled:this.ready&&!this.systemMenuBusy,action:()=>this.openSystemMenu(request)});}
     items.push({separator:true},{text:'取消选择',action:()=>{this.selection.clear();this.draw();}});
     if(this.api.menu){try{await this.api.menu(items);}catch(e){this.notify(String(e));}return;}
