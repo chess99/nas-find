@@ -1,5 +1,6 @@
 import {Explorer} from './shared/explorer.js';
 import {drawConnection,canShare} from './connection-share.js';
+import {popupFileMenu} from './file-menu.js';
 const $=id=>document.getElementById(id),invoke=(command,args={})=>window.__TAURI__.core.invoke(command,args);
 let toastTimer,connected=false,poll,isMac=false,savedServer='',remembered=false,shareGeneration=0,sourceConfigs=[];
 function toast(text){clearTimeout(toastTimer);$('toast').textContent=text;$('toast').classList.remove('hidden');toastTimer=setTimeout(()=>$('toast').classList.add('hidden'),4000);}
@@ -9,7 +10,7 @@ const explorer=new Explorer($('explorer'),{
   startBulk:options=>invoke('start_bulk',options),bulkStatus:id=>invoke('bulk_status',{id}),cancelBulk:id=>invoke('cancel_bulk',{id}),
   revealExport:id=>invoke('reveal_export',{id}),
   systemMenu:request=>invoke('show_system_menu',request),
-  menu:async items=>{const menu=await window.__TAURI__.menu.Menu.new({items:items.map((item,i)=>item.separator?{item:'Separator'}:{id:`item-${i}`,text:item.text,enabled:item.enabled!==false,action:item.action})});try{await menu.popup();}finally{await menu.close();}},
+  menu:(items,context)=>popupFileMenu(items,context,{isMac,invoke,notify:toast,popup:async items=>{const menu=await window.__TAURI__.menu.Menu.new({items:items.map((item,i)=>item.separator?{item:'Separator'}:{id:`item-${i}`,text:item.text,enabled:item.enabled!==false,action:item.action})});try{await menu.popup();}finally{await menu.close();}}}),
   action:async(file,action)=>{
     if(action==='open_with'&&file.directory){toast('请选择一个文件');return;}
     const result=await invoke('file_action',{path:file.path,action});

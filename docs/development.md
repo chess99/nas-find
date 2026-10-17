@@ -26,6 +26,7 @@ Linux 本地目录 → inotify 变化通知 → plocate 索引
 | `nasfind/static/` | 网页入口及两端共用的列表、选择逻辑和样式 |
 | `desktop/src/` | 桌面页面与 Tauri 适配层 |
 | `desktop/src-tauri/src/` | 连接、平台路径、系统操作和批量导出 |
+| `desktop/src/file-menu.js`、`desktop/src-tauri/src/system_menu_macos.rs`、`file_menu_macos.m` | macOS 文件菜单适配、SMB 校验及 AppKit 原生菜单与系统服务 |
 | `desktop/src/connection-share.js`、`desktop/src-tauri/src/connection_share.rs` | 已保存连接的二维码生成与安全凭据读取 |
 | `android/app/src/main/` | Android 原生界面、会话存储、查询、预览和文件操作 |
 | `android/app/src/test/`、`android/app/src/androidTest/` | Android 协议/模型测试、设备界面测试与显式真实服务检查 |
@@ -231,6 +232,12 @@ npm test
 Tauri 自动合并 `src-tauri/tauri.macos.conf.json`。产物为 `src-tauri/target/release/bundle/macos/NAS Find.app` 和 `bundle/dmg/` 中的安装镜像；只构建应用可用 `npm run build -- --bundles app`。默认构建当前 CPU 架构；其他架构需对应 Rust target，本文不将本机验证视为 Intel 验证。
 
 macOS 使用 `native_macos.rs`，Windows 原生模块和依赖按平台编译。Mac 以 POSIX 挂载路径打开文件，打开前用 `statfs` 校验 SMB 服务器、共享名和挂载位置；服务器别名需与挂载时一致。查询、复制路径和导出不探测源文件。虚拟列表将 WebKit 弹性滚动产生的越界 scrollTop 限制在有效范围，避免向 NAS 请求负数页。客户端直连搜索服务，不通过系统 HTTP/SOCKS 代理，避免局域网地址被代理转发。密码放在当前用户的 Keychain，设置文件只保存凭据引用；退出登录时删除对应凭据。
+
+单选文件菜单先按文件所属索引源选择共享和挂载配置，在后台校验对应共享，再由 `system_menu_macos.rs` 调度到窗口主线程。`file_menu_macos.m` 由 `cc` 使用 Xcode 工具链编译，调用 AppKit、Quick Look 和 Uniform Type Identifiers；无额外运行时脚本。macOS 12 及以上使用 `NSWorkspace.URLsForApplicationsToOpenURL` 获取类型匹配的应用，macOS 11 使用 Launch Services 兼容接口。应用按 bundle ID 去重，默认副本优先，再优先系统应用目录中的副本。用户选择后再次校验共享，通过结构化参数调用指定应用，不修改默认文件关联。
+
+系统服务通过临时文件选择 responder 和独立的服务剪贴板传递文件 URL / 兼容文件清单，不改写用户的通用剪贴板。菜单结束后恢复原 responder 和 Services 菜单；Quick Look 的 responder 保留到预览结束，共享对象保留到系统共享操作结束。Finder Sync 等 Finder 宿主扩展不属于本菜单的加载范围。离线时前端退回常规菜单，路径复制和导出仍只依赖索引。
+
+`./build.sh test` 同时运行 Rust 测试和 `tests/file-menu-macos.sh`。后者直接编译生产 Objective-C 实现，用临时中文及特殊字符文件、文本/视频类型差异和私有剪贴板验证应用筛选、默认排序、去重、图标、目录限制、操作返回值和服务输入；不修改系统默认应用，也不访问真实 NAS。界面检查可用同一 `tests/file-menu-macos.m` 的 `--ui` 模式，验证预览、共享选择/取消、其他应用选择/取消及系统服务执行；实际发送共享内容需另行明确授权。
 
 本地构建默认使用 ad-hoc 签名，没有 Apple 开发者签名与公证。公开分发前需配置签名及公证。直接在本机构建运行不需要开发者账号。需要 Finder 显示简介时，系统可能请求自动化权限。
 

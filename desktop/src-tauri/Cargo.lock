@@ -2166,6 +2166,7 @@ dependencies = [
 name = "nas-find-desktop"
 version = "0.6.0"
 dependencies = [
+ "cc",
  "chrono",
  "libc",
  "percent-encoding",

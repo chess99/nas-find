@@ -291,12 +291,40 @@ async fn disconnect(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn show_file_menu(
+    path: String,
+    items: Value,
+    position: Option<Value>,
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    #[cfg(target_os = "macos")]
+    return system_menu::file_menu(path, items, position, window, state).await;
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (path, items, position, window, state);
+        Err("此平台请使用系统右键菜单".into())
+    }
+}
+
+#[tauri::command]
 async fn file_action(
     path: String,
     action: String,
     window: tauri::WebviewWindow,
     state: State<'_, AppState>,
 ) -> Result<Value, String> {
+    #[cfg(target_os = "macos")]
+    if action == "open_with" {
+        return system_menu::file_menu(
+            path,
+            json!([{"native":"open_with","text":"打开方式"}]),
+            None,
+            window,
+            state,
+        )
+        .await;
+    }
     let config = state.session()?.config;
     let owner = native::owner(&window)?;
     let result = tauri::async_runtime::spawn_blocking(move || {
@@ -435,6 +463,7 @@ fn main() {
             refresh_index,
             disconnect,
             file_action,
+            show_file_menu,
             file_info,
             create_query,
             query_page,

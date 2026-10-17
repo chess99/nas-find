@@ -112,7 +112,7 @@ export class Explorer {
   }
   paint(){for(const row of this.$('visible').children){const selected=this.selection.contains(Number(row.dataset.index));row.classList.toggle('selected',selected);row.setAttribute('aria-selected',String(selected));}this.updateSelection();}
   async selectedFile(){if(this.selection.count(this.total)!==1)return null;let index=this.selection.focus;if(index<0||!this.selection.contains(index)){index=0;while(index<this.total&&!this.selection.contains(index))index++;}if(!this.file(index))await this.load(Math.floor(index/PAGE)*PAGE);return this.file(index);}
-  async singleAction(action){const file=await this.selectedFile();if(!file){this.notify('此操作仅支持单个项目；批量路径请用 Ctrl+Shift+C');return;}try{await this.api.action(file,action);}catch(e){this.notify(String(e.message||e));}}
+  async singleAction(action,captured=null){const file=captured||await this.selectedFile();if(!file){this.notify('此操作仅支持单个项目；批量路径请用 Ctrl+Shift+C');return;}try{await this.api.action(file,action);}catch(e){this.notify(String(e.message||e));}}
   key(e){
     if(e.isComposing)return;const key=e.key.toLowerCase(),ctrl=e.ctrlKey||e.metaKey;
     if(ctrl&&key==='a'){e.preventDefault();this.selection.selectAll();this.paint();}
@@ -123,13 +123,14 @@ export class Explorer {
     else if(['ArrowDown','ArrowUp','Home','End','PageDown','PageUp'].includes(e.key)&&this.total){e.preventDefault();const delta={ArrowDown:1,ArrowUp:-1,Home:-this.total,End:this.total,PageDown:this.visibleCount(),PageUp:-this.visibleCount()}[e.key];const index=Math.max(0,Math.min(this.total-1,this.selection.focus+delta));this.selection.choose(index,{ctrl,shift:e.shiftKey});const start=this.startIndex();if(index<start||index>=start+this.visibleCount()-1)this.scrollTo(index);else this.draw();}
   }
   async menu(event){
-    const count=this.selection.count(this.total);if(!count)return;const single=count===1,items=[];
-    if(single)items.push({text:'打开',action:()=>this.singleAction('open')},{text:'打开所在位置',action:()=>this.singleAction('reveal')},{text:'打开方式…',action:()=>this.singleAction('open_with')},{text:'复制文件',action:()=>this.singleAction('copy_file')},{separator:true});
-    items.push({text:`复制路径${count>1?`（${count.toLocaleString()} 项）`:''}`,enabled:this.ready,action:()=>this.bulk('clipboard')},{text:'复制带引号的路径',enabled:this.ready,action:()=>this.bulk('clipboard',{quoted:true})},{text:'复制 UNC 路径',enabled:this.ready,action:()=>this.bulk('clipboard',{unc:true})},{text:'导出 TXT 路径清单',enabled:this.ready,action:()=>this.bulk('export')},{text:'导出 CSV 完整清单',enabled:this.ready,action:()=>this.bulk('export',{format:'csv'})});
-    if(single)items.push({separator:true},{text:'属性 / 详情',action:()=>this.singleAction('properties')},{text:'在此目录内搜索',action:async()=>{const f=await this.selectedFile();this.setScope(f.directory?f.path:f.path.slice(0,Math.max(0,f.path.lastIndexOf('/'))));this.search();}});
-    if(this.api.systemMenu){const request={id:this.id,selection:this.selection.payload()};items.push({separator:true},{text:'系统右键菜单…',enabled:this.ready&&!this.systemMenuBusy,action:()=>this.openSystemMenu(request)});}
+    const count=this.selection.count(this.total);if(!count)return;const single=count===1,items=[],request={id:this.id,selection:this.selection.payload()},file=single?await this.selectedFile():null;
+    const batch=(mode,options={})=>this.bulk(mode,{}, {...request,unc:false,quoted:false,format:'txt',...options});
+    if(single)items.push({text:'打开',action:()=>this.singleAction('open',file)},{text:'打开所在位置',action:()=>this.singleAction('reveal',file)},{text:'打开方式…',native:'open_with',action:()=>this.singleAction('open_with',file)},{text:'复制文件',action:()=>this.singleAction('copy_file',file)},{separator:true});
+    items.push({text:`复制路径${count>1?`（${count.toLocaleString()} 项）`:''}`,enabled:this.ready,action:()=>batch('clipboard')},{text:'复制带引号的路径',enabled:this.ready,action:()=>batch('clipboard',{quoted:true})},{text:'复制 UNC 路径',enabled:this.ready,action:()=>batch('clipboard',{unc:true})},{text:'导出 TXT 路径清单',enabled:this.ready,action:()=>batch('export')},{text:'导出 CSV 完整清单',enabled:this.ready,action:()=>batch('export',{format:'csv'})});
+    if(single)items.push({separator:true},{text:'属性 / 详情',action:()=>this.singleAction('properties',file)},{text:'在此目录内搜索',action:async()=>{const f=file;this.setScope(f.directory?f.path:f.path.slice(0,Math.max(0,f.path.lastIndexOf('/'))));this.search();}});
+    if(this.api.systemMenu){items.push({separator:true},{text:'系统右键菜单…',enabled:this.ready&&!this.systemMenuBusy,action:()=>this.openSystemMenu(request)});}
     items.push({separator:true},{text:'取消选择',action:()=>{this.selection.clear();this.draw();}});
-    if(this.api.menu){try{await this.api.menu(items);}catch(e){this.notify(String(e));}return;}
+    if(this.api.menu){try{await this.api.menu(items,{file,position:event?{x:event.clientX,y:event.clientY}:null});}catch(e){this.notify(String(e));}return;}
     document.querySelector('.ex-menu')?.remove();const menu=document.createElement('div');menu.className='ex-menu';menu.style.left=`Math.min(event?.clientX||100,innerWidth-240)}px`;menu.style.top=`Math.min(event?.clientY||160,innerHeight-400)}px`;
     for(const item of items){if(item.separator){menu.append(document.createElement('hr'));continue;}const button=document.createElement('button');button.textContent=item.text;button.disabled=item.enabled===false;button.onclick=()=>{menu.remove();item.action();};menu.append(button);}document.body.append(menu);const dismiss=e=>{if(!menu.contains(e.target)){menu.remove();document.removeEventListener('pointerdown',dismiss,true);}};document.addEventListener('pointerdown',dismiss,true);
   }
