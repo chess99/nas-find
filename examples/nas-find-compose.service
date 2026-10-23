@@ -1,0 +1,22 @@
+[Unit]
+Description=NAS Find Compose startup with LAN readiness and retry
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+# Replace the working directory and interface with the actual deployment values.
+WorkingDirectory=/opt/nas-find
+ExecStartPre=/usr/lib/systemd/systemd-networkd-wait-online --interface=enp1s0:routable --ipv4 --timeout=120
+ExecStart=/usr/bin/docker compose --env-file .local/docker.env up -d --wait --wait-timeout 120 nas-find
+ExecStop=/usr/bin/docker compose --env-file .local/docker.env stop nas-find
+RemainAfterExit=yes
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=270
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target
