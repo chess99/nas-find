@@ -62,36 +62,25 @@ docker compose --env-file .local/docker.env logs --tail=50
 
 容器启动时设置专用配置目录属主，然后以 PUID/PGID 指定的用户运行服务。也可事先准备目录权限，通过 Docker `--user UID:GID` 直接指定运行用户，此时忽略 PUID/PGID。
 
-### 开机后搜索端口未恢复
+### 固定 IP 绑定与开机恢复
 
-绑定指定局域网 IP 时，Docker 若先于该 IP 就绪而恢复容器，会报 `bind: cannot assign requested address`。这是容器进程启动前的端口发布失败；不能依靠 `restart: unless-stopped` 处理这次失败。应先检查实际时间线，不将它误判为密码、索引或客户端权限问题：
+将容器端口绑定到指定局域网 IP 时，宿主机必须在 Docker 恢复容器前取得该地址。建议在路由器为 NAS 预留 DHCP 地址，并确认开机等待由实际管理网卡的网络服务执行、包含该网卡的 IPv4 就绪检查。仅依赖 `network-online.target` 不足以确认这一点；Netplan 的 `optional: true` 或等待服务被跳过都可能使 Docker 提前启动。网络配置调整后应在维护窗口重启验收。
+
+若容器停止且 `docker inspect <容器名>` 的 `.State.Error` 包含 `bind: cannot assign requested address`，对照 `journalctl -b -u docker -u systemd-networkd -o short-iso-precise` 和 `ip -4 address` 检查绑定失败与地址就绪的时间。此类失败发生在容器进程启动前，`restart: unless-stopped` 不能替代宿主机的启动等待。地址恢复后，使用原 Compose 配置执行 `up -d --wait --wait-timeout 120 nas-find`，再验证登录和搜索；保留配置、密码与索引。
+
+无法调整宿主机启动顺序时，可选用 [Compose 启动模板](../examples/nas-find-compose.service) 为 NAS Find 单独等待 IPv4 并重试启动。模板适用于 systemd-networkd 和支持 `--wait` 的 Compose v2；安装前替换工程目录、网卡名、环境文件与服务名。其他网络管理器需使用对应的就绪检查。保留原局域网 IP 绑定和容器重启策略。
+
+调整后的模板由管理员安装到 `/etc/systemd/system/nas-find-compose.service`：
 
 ```sh
-docker compose --env-file .local/docker.env ps -a
-docker inspect <容器名> --format '{{json .State}}'
-journalctl -b -u docker -u systemd-networkd -u systemd-networkd-wait-online -u NetworkManager-wait-online -o short-iso-precise
-ip -4 address
+sudo systemd-analyze verify /etc/systemd/system/nas-find-compose.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now nas-find-compose.service
 ```
 
-比较端口绑定失败与网卡取得 IPv4 的时间。`network-online.target` 已到达不等于所需地址已就绪：Netplan 的 `optional: true` 可使网卡不参加开机等待；同时运行多个网络管理器时，一个管理器的等待完成也不能证明另一个管理器负责的网卡已就绪。还应检查等待服务是否因条件不满足而跳过。
+服务读取的 Compose 和环境文件应由管理员控制。维护容器前先停止该服务，完成后重新启动；停用时执行 `systemctl disable --now nas-find-compose.service`，会停止容器并保留数据。`active (exited)` 表示首次启动及健康等待成功，后续容器状态仍通过 Compose 检查。
 
-地址恢复后，使用原环境文件执行 `docker compose --env-file .local/docker.env up -d --wait --wait-timeout 120 nas-find`，再验证首页、登录和搜索。保留原配置目录、密码和索引，不删除卷或重建索引，也不通过改绑 `0.0.0.0` 扩大监听范围。
-
-对于 **systemd-networkd 管理网卡、Compose v2 支持 `--wait`** 的 Linux 主机，可采用 [开机启动模板](../examples/nas-find-compose.service)，让 NAS Find 在指定网卡具有可路由 IPv4 后启动，并对等待、端口绑定或健康检查失败每 10 秒重试。它只管理 NAS Find，不重启 Docker 或其他容器。安装前必须逐项调整：
-
-- `WorkingDirectory` 改为实际 Compose 工程目录，两个 Compose 命令中的环境文件、服务名与现有部署一致；已有部署不使用环境文件时移除相应参数，不能覆盖原 Compose 配置。
-- `ExecStartPre` 的网卡名及工具路径按主机填写。使用 NetworkManager 或其他管理器时，应换成该管理器对指定网卡/IPv4 的检查，不能原样套用 networkd 命令。
-- 仍保留 Compose 的 `restart: unless-stopped`，用于容器已经运行后的进程退出恢复；systemd 的重试负责开机启动失败。若 DHCP 分配的地址发生变化，应修正绑定配置或在路由器预留地址，重试不会自动替换部署 IP。
-
-以系统级服务安装，需管理员权限。将调整后的文件保存为 `/etc/systemd/system/nas-find-compose.service`，先运行 `systemd-analyze verify /etc/systemd/system/nas-find-compose.service`，再执行 `systemctl daemon-reload` 和 `systemctl enable --now nas-find-compose.service`。部署文件应由管理员控制；不要让不可信用户修改 root 服务读取的 Compose 或环境文件。
-
-已有常驻用户服务（`loginctl show-user <用户名> -p Linger` 返回 `Linger=yes`）且该用户已有 Docker 权限时，也可安装为用户服务，无需改动系统服务或网络配置。复用上述模板时，删除 `[Unit]` 中的 `Requires`、`After`、`Wants`（用户管理器不能依赖系统管理器中的 Docker/网络单元），将 `WantedBy` 改为 `default.target`。保留 IPv4 前置检查、启动超时和失败重试；Docker 尚未启动时 Compose 失败也会触发重试。若已有授权仅允许 `sudo -n /usr/bin/docker`，两个 Compose 命令需使用此命令前缀，不能额外放宽 sudo 权限。
-
-用户服务文件保存到 `~/.config/systemd/user/nas-find-compose.service`，使用 `systemd-analyze --user verify <文件路径>` 验证；后续 `systemctl` 命令均添加 `--user`。未启用 linger 的用户服务不能据此宣称支持无人登录时开机恢复。
-
-维护时先执行 `systemctl stop nas-find-compose.service`，再操作容器，避免开机重试与维护竞争。服务达到 `active (exited)` 说明首次启动及健康等待成功，后续仍需用 Compose 检查容器状态。停用方案使用 `systemctl disable --now nas-find-compose.service`，会停止 NAS Find 容器，保留配置与索引；需要继续运行时再手动 `up -d`。
-
-验收分两步：先验证等待命令在当前网卡就绪时成功、在不存在的测试网卡上超时失败；再在允许重启 NAS 的维护窗口确认开机自动恢复、容器健康、登录和搜索正常。只运行等待命令或静态检查不算开机验收通过。
+验收需包含 NAS 重启后的自动恢复、容器健康、登录和搜索。静态配置检查或当前网卡就绪检查不能代替开机验收。
 
 ### Unraid 安装
 
