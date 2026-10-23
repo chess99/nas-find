@@ -1,6 +1,8 @@
+import {CompatibleAudioPlayer} from './audio-compat.js';
 const VIDEO_EXTENSIONS=new Set('mp4 m4v mkv mov webm avi mpg mpeg wmv flv f4v ts mts m2ts vob ogv 3gp rm rmvb'.split(' '));
 const AUDIO_EXTENSIONS=new Set('mp3 flac wav aac m4a ogg opus wma aiff aif ape alac mid midi'.split(' '));
-const TRANSPORT_EXTENSIONS=new Set(['flv','ts','mts','m2ts']);
+const TRANSPORT_EXTENSIONS=new Set(['flv','f4v','ts','mts','m2ts']);
+const AUDIO_COMPAT_EXTENSIONS=new Set(['mp4','m4v','mov','mkv','avi','ts','mts','m2ts']);
 let transportLibrary;
 
 // The player is served locally and only fetched for FLV / transport streams.
@@ -31,12 +33,17 @@ export class FilePreview{
     this.dialog=dialog;this.api=api;this.copy=copy;this.notify=notify;
     this.$=id=>dialog.querySelector('#'+id);
     this.content=this.$('preview-content');this.download=this.$('download');this.retry=this.$('preview-retry');
+    this.compatButton=this.$('preview-compat');
     this.$('close-preview').onclick=()=>this.close();
-    this.retry.onclick=()=>this.show(this.file);
+    this.retry.onclick=()=>this.show(this.file,this.session?.mode||'auto',this.session?.position||0);
+    this.compatButton.onclick=()=>this.show(this.file,this.session?.compatible?'original':'compat',this.media?.currentTime||0,!this.media?.paused,
+      this.media?{volume:this.media.volume,muted:this.media.muted,rate:this.media.playbackRate}:null);
     this.$('preview-copy').onclick=()=>this.copy(this.file).catch(error=>this.notify(error.message));
     dialog.addEventListener('close',()=>{if(!dialog.open)this.dispose();});
     dialog.addEventListener('cancel',()=>this.dispose());
   }
+
+  setCapabilities(media={}){this.audioCompatibility=Boolean(media.audio_compatibility);}
 
   releaseMedia(){
     if(this.player){this.player.destroy();this.player=null;}
@@ -110,14 +117,14 @@ export class FilePreview{
       '可下载原文件，用本地应用打开。');
   }
 
-  async show(file){
+  async show(file,mode='auto',position=0,play=false,settings=null){
     this.dispose();this.file=file;
-    const session={controller:new AbortController(),params:new URLSearchParams({path:file.path})};
+    const session={controller:new AbortController(),params:new URLSearchParams({path:file.path}),mode,position,play,settings};
     this.session=session;const signal=session.controller.signal;
     this.$('preview-title').textContent=file.name;
     this.$('preview-path').textContent=file.path.includes('/')?file.path.slice(0,file.path.lastIndexOf('/')):'共享根目录';
     this.$('preview-path').title=file.path;this.$('file-meta').textContent='';
-    this.download.href='/api/file?'+session.params+'&download=1';this.download.hidden=true;this.download.classList.remove('primary');this.retry.hidden=true;
+    this.download.href='/api/file?'+session.params+'&download=1';this.download.hidden=true;this.download.classList.remove('primary');this.retry.hidden=true;this.compatButton.hidden=true;
     this.message('正在读取文件…');this.content.setAttribute('aria-busy','true');
     if(!this.dialog.open)this.dialog.showModal();
     try{
@@ -159,7 +166,9 @@ export class FilePreview{
   async showMedia(session,info){
     const signal=session.controller.signal,media=document.createElement(session.kind);
     this.media=media;media.controls=true;media.preload='metadata';media.setAttribute('playsinline','');
+    if(session.settings){media.volume=session.settings.volume;media.muted=session.settings.muted;media.defaultPlaybackRate=session.settings.rate;media.playbackRate=session.settings.rate;}
     media.setAttribute('aria-label',this.file.name);
+    media.addEventListener('timeupdate',()=>{if(this.current(session))session.position=media.currentTime;},{signal});
     const stage=document.createElement('div');stage.className='preview-stage '+session.kind;stage.append(media);
     this.state=document.createElement('p');this.state.className='preview-state';this.state.setAttribute('role','status');
     this.content.replaceChildren(stage,this.state);this.loading(session,'正在加载…');
@@ -173,18 +182,56 @@ export class FilePreview{
     const url='/api/file?'+session.params,extension=this.file.name.split('.').at(-1).toLowerCase();
     media.addEventListener('error',async()=>{
       if(!this.current(session))return;
+      if(session.compatible){this.compatFailure(session);return;}
       if(media.error?.code!==2&&TRANSPORT_EXTENSIONS.has(extension)&&!session.adapted){
         this.loading(session,'正在加载…');
         if(await this.attachTransport(session,info,media,url,extension))return;
       }
       this.failure(session,media.error?.code===2?'network':'preview');
     },{signal});
-    if(TRANSPORT_EXTENSIONS.has(extension)&&!media.canPlayType(info.mime)){
+    if(this.audioCompatibility&&AUDIO_COMPAT_EXTENSIONS.has(extension)){
+      try{
+        const audio=await this.read('/api/media/info?'+session.params,session);
+        if(!this.current(session))return;
+        if(audio.compatible&&globalThis.MediaSource?.isTypeSupported(audio.mime)){
+          session.audio=audio;this.compatButton.hidden=false;this.compatButton.textContent='兼容播放';
+          this.compatButton.title='视频保持原画质，声音以立体声播放';
+          if(session.mode==='compat'||(session.mode==='auto'&&!media.canPlayType(audio.audio_type))){this.attachAudio(session,media);return;}
+        }else if(session.mode==='compat'){
+          this.message('此视频暂不支持音轨兼容','可下载原文件，用本地播放器打开。');return;
+        }
+      }catch(error){
+        if(!this.current(session))return;
+        if(session.mode==='compat'){this.compatFailure(session,error);return;}
+        this.compatButton.hidden=false;this.compatButton.textContent='兼容播放';
+        this.compatButton.title='无声或无法播放时，可重试音轨兼容';
+        // Optional preparation must not block original-file playback.
+      }
+    }
+    if(TRANSPORT_EXTENSIONS.has(extension)&&(extension!=='f4v'||info.mime==='video/x-flv')&&!media.canPlayType(info.mime)){
       if(await this.attachTransport(session,info,media,url,extension))return;
     }
     if(!this.current(session))return;
     // MIME support checks can reject playable MKV / MOV files. Try the actual file.
     media.src=url;
+    if(session.position||session.play)media.addEventListener('loadedmetadata',()=>{
+      if(!this.current(session))return;
+      if(session.position)media.currentTime=session.position;
+      if(session.play)media.play().catch(()=>{});
+    },{once:true,signal});
+  }
+
+  attachAudio(session,media){
+    session.compatible=true;this.compatButton.textContent='原文件播放';this.compatButton.title='使用文件原有音轨';
+    const note=document.createElement('p');note.className='preview-note';note.textContent='兼容音轨 · 视频保持原画质';this.content.append(note);
+    const player=new CompatibleAudioPlayer(media,session.audio,this.file.path,{error:error=>this.compatFailure(session,error)});
+    this.player=player;player.load(session.position,session.play);
+  }
+
+  compatFailure(session,error){
+    if(!this.current(session))return;
+    session.failed=true;this.releaseMedia();this.retry.hidden=false;this.download.classList.add('primary');
+    this.message('兼容播放暂时不可用',error?.message||'可重试，或下载原文件后打开。');
   }
 
   async attachTransport(session,info,media,url,extension){
@@ -196,7 +243,7 @@ export class FilePreview{
     if(!library.isSupported())return false;
     try{
       media.removeAttribute('src');media.load();library.LoggingControl.enableAll=false;
-      const player=library.createPlayer({type:extension==='flv'?'flv':'mpegts',url,isLive:false,filesize:info.size,withCredentials:true},
+      const player=library.createPlayer({type:extension==='flv'||extension==='f4v'?'flv':'mpegts',url,isLive:false,filesize:info.size,withCredentials:true},
         {enableWorker:false,enableStashBuffer:false,lazyLoadMaxDuration:30,lazyLoadRecoverDuration:10,autoCleanupSourceBuffer:true});
       this.player=player;
       player.on(library.Events.ERROR,type=>this.failure(session,type===library.ErrorTypes.NETWORK_ERROR?'network':'preview'));

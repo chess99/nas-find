@@ -27,6 +27,7 @@ class MediaDelivery(unittest.TestCase):
                   "password_file": str(password), "allowed_networks": ["127.0.0.0/8"],
                   "require_mount": False, "exclude_names": [], "exclude_paths": []}
         engine = SimpleNamespace(config=config, state=state, scope=Scope(config))
+        engine.status = lambda: {"available": True, "entries": 1}
         self.server = Server(("127.0.0.1", 0), engine)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -64,7 +65,7 @@ class MediaDelivery(unittest.TestCase):
                                 ("m2ts", "video/mp2t"), ("opus", "audio/ogg")]:
             with self.subTest(extension=extension):
                 name = "中文 空格." + extension
-                content = (b'G' + b'\0' * 187) * 4 if extension == "ts" else bytes(range(256))
+                content = (b'G' + b'\0' * 187) * 4 if extension in {"ts", "mts"} else bytes(range(256))
                 (self.root / name).write_bytes(content)
                 query = "?path=" + quote(name, safe="")
                 with self.request("/api/info" + query) as response:
@@ -90,6 +91,27 @@ class MediaDelivery(unittest.TestCase):
             self.assertEqual(json.load(response)["mime"], "text/plain")
         with self.request("/api/preview?path=source.ts") as response:
             self.assertIn("export const", json.load(response)["text"])
+
+    def test_f4v_sniffs_actual_container_and_mts_text_remains_text(self):
+        self.login()
+        (self.root / "renamed.f4v").write_bytes(b'FLV\x01\x05\0\0\0\x09')
+        (self.root / "module.mts").write_text('export const x = 1;')
+        for name, mime in [('renamed.f4v','video/x-flv'),('module.mts','text/plain')]:
+            with self.request('/api/info?path='+name) as response:
+                self.assertEqual(json.load(response)['mime'],mime)
+
+    def test_audio_compatibility_is_optional_and_authenticated(self):
+        (self.root / 'movie.mkv').write_bytes(b'fixture')
+        for path in ['/api/media/info?path=movie.mkv','/api/media/stream?path=movie.mkv']:
+            with self.request(path) as response:
+                self.assertEqual(response.status,401)
+        self.login()
+        with self.request('/api/media/info?path=movie.mkv') as response:
+            self.assertFalse(json.load(response)['available'])
+        with self.request('/api/media/stream?path=movie.mkv') as response:
+            self.assertEqual(response.status,503)
+        with self.request('/api/status') as response:
+            self.assertFalse(json.load(response)['media']['audio_compatibility'])
 
     def test_file_access_and_active_content_boundaries(self):
         (self.root / "clip.mp4").write_bytes(b"fixture")

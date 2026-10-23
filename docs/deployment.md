@@ -19,7 +19,7 @@
 
 ## Docker 部署（Ubuntu / 通用 Linux）
 
-镜像包含 Python 3.12、plocate 和网页，无需在宿主安装这些依赖。需要安装 Docker Engine 与 Compose v2。下面按源码构建部署；镜像构建与发布流程见[开发文档](development.md)。
+镜像包含 Python 3.12、plocate、FFmpeg 和网页，无需在宿主安装这些依赖。需要安装 Docker Engine 与 Compose v2。下面按源码构建部署；镜像构建与发布流程见[开发文档](development.md)。
 
 一个实例可统一索引多个 SMB 共享。以下先说明单共享安装；多个共享的配置见下方“多个索引共享”。准备宿主上的共享数据目录、对应的 SMB 共享根路径，以及索引范围外的独立配置目录。
 
@@ -158,6 +158,14 @@ docker compose --env-file .local/docker.env up -d --no-build
 ```
 
 首次使用发布镜像同样采用这两条命令。Unraid 在 Docker 页更新容器。更新时保留 `/config` 的宿主目录和路径映射，以继续使用原有配置、密码及索引；回滚时恢复之前记录的镜像版本和必要的配置备份。
+
+### 音轨兼容
+
+此功能默认关闭，按需处理当前预览视频的默认音轨，不扫描视频库、不预生成播放副本。服务最多同时处理 2 路，视频始终保留原编码，输出音轨为 AAC 立体声；关闭或暂停播放后释放处理进程。
+
+Docker 镜像已包含 FFmpeg / ffprobe。停止 NAS Find 容器，在原专用配置目录的 `config.json` 顶层加入 `"audio_compatibility": true`，保留其他配置、密码和索引，再启动容器。设为 `false` 可关闭。启用后网页自动获取能力，无需升级桌面或 Android 客户端。
+
+原生 Linux 部署需要在服务用户的 PATH 中提供 `ffmpeg` 和 `ffprobe`，然后在原配置顶层启用同一字段并重启服务。Ubuntu / Debian 可通过系统软件包 `ffmpeg` 安装两个程序。缺少工具时搜索和原文件播放仍可用，音轨兼容入口不显示；可通过 `/api/status` 的 `media.audio_compatibility` 确认实际可用状态。
 
 ## 原生部署
 

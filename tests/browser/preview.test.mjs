@@ -88,6 +88,107 @@ test('FLV uses a local adapter with working audio and indexed seeking',async()=>
   assert.deepEqual(errors,[]);await context.close();
 });
 
+test('FLV disguised as F4V uses the transport adapter without audio conversion',async()=>{
+  const {context,page}=await pageForTest();
+  const conversion=[];page.on('request',request=>{if(request.url().includes('/api/media/stream'))conversion.push(request.url());});
+  await open(page,'FLV封装.f4v');await playable(page);
+  assert.ok(await page.locator('video').evaluate(media=>media.src.startsWith('blob:')&&media.webkitAudioDecodedByteCount>0));
+  assert.equal(conversion.length,0);
+  await page.keyboard.press('Escape');await context.close();
+});
+
+test('AC3, EAC3, DTS and TrueHD play through the original video with compatible audio',async()=>{
+  const {context,page}=await pageForTest();
+  for(const name of ['AC3','EAC3','DTS','TrueHD']){
+    await open(page,'兼容 '+name+'.mkv');
+    await page.getByText('兼容音轨 · 视频保持原画质',{exact:true}).waitFor();
+    await playable(page);
+    const media=await page.locator('video').evaluate(video=>({frames:video.webkitDecodedFrameCount,audio:video.webkitAudioDecodedByteCount,duration:video.duration}));
+    assert.ok(media.frames>0&&media.audio>0,JSON.stringify({name,media}));
+    assert.ok(media.duration>29&&media.duration<31);
+    await page.keyboard.press('Escape');
+  }
+  await open(page,'兼容 AC3.m2ts');await playable(page);
+  assert.ok(await page.locator('video').evaluate(media=>media.webkitAudioDecodedByteCount>0));
+  await page.keyboard.press('Escape');
+  assert.deepEqual(errors,[]);await context.close();
+});
+
+test('compatible audio seeks in both directions beyond the buffer and resumes after pause',async()=>{
+  const {context,page}=await pageForTest();const starts=[];
+  page.on('request',request=>{if(request.url().includes('/api/media/stream?'))starts.push(Number(new URL(request.url()).searchParams.get('start')));});
+  await open(page,'长视频 AC3.mkv');await playable(page);
+  assert.ok(await page.locator('video').evaluate(video=>video.duration>119));
+  for(const target of [90,5]){
+    await page.locator('video').evaluate((video,target)=>{video.currentTime=target;},target);
+    try{
+      await page.waitForFunction(target=>{const v=document.querySelector('video');return v&&!v.seeking&&v.readyState>=2&&v.currentTime>=target-.1&&v.webkitAudioDecodedByteCount>0&&v.webkitDecodedFrameCount>0;},target,{timeout:15000});
+    }catch{
+      throw Error(JSON.stringify({target,starts,state:await page.evaluate(()=>{const v=document.querySelector('video');return {message:document.querySelector('#preview-content').textContent,media:v?{time:v.currentTime,duration:v.duration,ready:v.readyState,paused:v.paused,seeking:v.seeking,audio:v.webkitAudioDecodedByteCount,frames:v.webkitDecodedFrameCount,error:v.error?.message,buffered:Array.from({length:v.buffered.length},(_,i)=>[v.buffered.start(i),v.buffered.end(i)])}:null};})}));
+    }
+  }
+  assert.ok(starts.some(position=>position>89));assert.ok(starts.some(position=>position>=4&&position<10));
+  await page.locator('video').evaluate(video=>video.pause());
+  await new Promise(resolve=>setTimeout(resolve,2500));
+  const before=starts.length;
+  await page.locator('video').evaluate(video=>video.play());
+  await page.waitForFunction(()=>{const v=document.querySelector('video');return v.readyState>=2&&!v.paused&&v.webkitAudioDecodedByteCount>0;});
+  assert.ok(starts.length>before);
+  await page.locator('video').evaluate(video=>{video.currentTime=116;});
+  await page.waitForFunction(()=>{const v=document.querySelector('video');return v.currentTime>=115.9&&!v.seeking&&v.readyState>=2;});
+  await page.keyboard.press('Escape');assert.deepEqual(errors,[]);await context.close();
+});
+
+test('HEVC video stays compatible with converted audio when the browser supports HEVC MSE',async t=>{
+  const {context,page}=await pageForTest();
+  const response=await context.request.get(url+'/api/media/info?path='+encodeURIComponent('兼容 HEVC.mkv'));
+  const info=await response.json();
+  if(!await page.evaluate(mime=>MediaSource.isTypeSupported(mime),info.mime)){await context.close();t.skip('Browser has no HEVC MediaSource support');return;}
+  await open(page,'兼容 HEVC.mkv');
+  try{await playable(page);}catch{
+    throw Error(JSON.stringify(await page.evaluate(()=>{const v=document.querySelector('video');return {message:document.querySelector('#preview-content').textContent,v:v?{time:v.currentTime,ready:v.readyState,paused:v.paused,duration:v.duration,audio:v.webkitAudioDecodedByteCount,frames:v.webkitDecodedFrameCount,error:v.error?.message,buffered:Array.from({length:v.buffered.length},(_,i)=>[v.buffered.start(i),v.buffered.end(i)])}:null};})));
+  }
+  assert.ok(await page.locator('video').evaluate(v=>v.webkitAudioDecodedByteCount>0&&v.webkitDecodedFrameCount>0));
+  await page.locator('video').evaluate(v=>{v.currentTime=5;});
+  await page.waitForFunction(()=>{const v=document.querySelector('video');return v.currentTime>=4.9&&!v.seeking&&v.readyState>=2;});
+  await page.keyboard.press('Escape');assert.deepEqual(errors,[]);await context.close();
+});
+
+test('switching original and compatible playback preserves position and volume settings',async()=>{
+  const {context,page}=await pageForTest();
+  await open(page,'兼容 AC3.mkv');await playable(page);
+  await page.locator('video').evaluate(v=>{v.volume=.35;v.muted=true;v.playbackRate=1.5;});
+  await page.getByRole('button',{name:'原文件播放',exact:true}).click();await playable(page);
+  assert.ok(await page.locator('video').evaluate(v=>!v.src.startsWith('blob:')&&v.volume===.35&&v.muted&&v.playbackRate===1.5));
+  await page.getByRole('button',{name:'兼容播放',exact:true}).click();await playable(page);
+  assert.ok(await page.locator('video').evaluate(v=>v.webkitAudioDecodedByteCount>0&&v.volume===.35&&v.muted&&v.playbackRate===1.5));
+  await page.keyboard.press('Escape');assert.deepEqual(errors,[]);await context.close();
+});
+
+test('disabled audio compatibility keeps original playback and does not inspect tracks',async()=>{
+  const {context,page}=await pageForTest();
+  await page.route('**/api/status',async route=>{const response=await route.fetch();const data=await response.json();await route.fulfill({json:{...data,media:{audio_compatibility:false}}});});
+  await page.reload();await page.waitForSelector('.ex-row');
+  const requests=[];page.on('request',request=>{if(request.url().includes('/api/media/'))requests.push(request.url());});
+  await open(page,'兼容 AC3.mkv');await playable(page);
+  assert.equal(requests.length,0);assert.equal(await page.locator('#preview-compat').isVisible(),false);
+  await page.keyboard.press('Escape');await context.close();
+});
+
+test('a busy compatibility service offers retry and can recover',async()=>{
+  const {context,page}=await pageForTest({viewport:{width:320,height:568},isMobile:true,hasTouch:true});
+  await page.route('**/api/media/stream?*',route=>route.fulfill({status:503,json:{error:'音轨兼容正在使用中，请稍后重试'}}));
+  await open(page,'兼容 AC3.mkv');await page.getByRole('heading',{name:'兼容播放暂时不可用'}).waitFor();
+  for(const selector of ['#preview-copy','#preview-compat','#preview-retry','#download']){
+    const box=await page.locator(selector).boundingBox();
+    assert.ok(box.x>=0&&box.x+box.width<=320&&box.y>=0&&box.y+box.height<=568);
+  }
+  await page.unroute('**/api/media/stream?*');
+  await page.getByRole('button',{name:'重试',exact:true}).click();await playable(page);
+  assert.ok(await page.locator('video').evaluate(v=>v.webkitAudioDecodedByteCount>0));
+  await page.keyboard.press('Escape');assert.deepEqual(errors,[]);await context.close();
+});
+
 test('TS, MTS and M2TS decode video and audio and stop on close',async()=>{
   const {context,page}=await pageForTest();
   // Exercise fallback when a browser claims support but native playback fails.

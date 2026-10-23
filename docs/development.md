@@ -23,6 +23,7 @@ Linux 本地目录 → inotify 变化通知 → plocate 索引
 | `nasfind/engine.py` | 索引调度、发布和旧快照保护 |
 | `nasfind/queries.py` | 分类筛选、临时 SQLite 查询快照和批量路径读取 |
 | `nasfind/web.py` | HTTP、登录、文件预览、下载和查询接口 |
+| `nasfind/media.py`、`nasfind/static/audio-compat.js` | 可选音轨处理、进程限额及取消回收、保留原视频的分段 MP4 流和播放时间线 |
 | `nasfind/static/` | 网页入口及两端共用的列表、选择逻辑和样式 |
 | `nasfind/static/preview.js`、`vendor/` | 网页预览生命周期、原生媒体播放与按需加载的 FLV / MPEG-TS 封装适配 |
 | `desktop/src/` | 桌面页面与 Tauri 适配层 |
@@ -283,6 +284,8 @@ BROWSER_CHANNEL=chrome npm test
 ```
 
 浏览器测试覆盖原生播放、画面与声音解码、FLV 跨缓冲区跳转和 Range 请求、188/192 字节 TS 封装、缓冲片段内跳转、加载适配库失败后的重试、超时与登录失效、关闭释放，以及手机横竖屏操作区。截图输出到被忽略的 `.local/media-preview/`。Docker 工作流同时运行网页播放检查；第三方播放脚本及许可说明见 `nasfind/static/vendor/README.md`。
+
+音轨兼容的 HTTP 与进程测试位于 `tests/test_audio_compat.py`，需要 FFmpeg / ffprobe；缺少时明确跳过。覆盖真实 AAC 输出、转换前后视频帧一致、跳转后的片段时间戳、并发限制、取消回收及文件访问边界。浏览器测试还覆盖 AC-3 / E-AC-3 / DTS / TrueHD、双向跳转与暂停恢复。处理通过已验证的文件描述符读取原文件，源文件和源目录保持只读，不把用户路径拼入命令。
 
 | 改动 | 重点验证 |
 |---|---|

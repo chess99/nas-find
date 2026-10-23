@@ -31,7 +31,7 @@ class ConfigurationTests(unittest.TestCase):
     def test_invalid_settings_fail_early(self):
         for extra in ({"port":0},{"port":True},{"allowed_networks":[]},{"exclude_paths":"cache"},
                       {"update_interval":0},{"update_interval":float("nan")},{"allowed_networks":[1]},
-                      {"require_mount":"yes"},{"unc_prefix":"C:\\data"}):
+                      {"require_mount":"yes"},{"audio_compatibility":"yes"},{"unc_prefix":"C:\\data"}):
             with self.assertRaises(ValueError): normalize(profile(**extra))
 
     def test_program_discovery_and_missing_dependency(self):

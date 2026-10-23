@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, quote, urlsplit
 from .queries import Queries
 from . import __version__
 from .protocol import API_VERSION, MIN_CLIENT_API_VERSION, CAPABILITIES
+from .media import AudioCompatibility, MediaError
 
 LOG = logging.getLogger(__name__)
 STATIC = Path(__file__).parent / "static"
@@ -31,7 +32,7 @@ MEDIA_TYPES = {
     "wav": "audio/wav", "ogg": "audio/ogg", "opus": "audio/ogg", "aif": "audio/aiff", "aiff": "audio/aiff",
 }
 SAFE_INLINE.update(MEDIA_TYPES.values())
-STATIC_FILES = {"/", "/app.js", "/preview.js", "/style.css", "/explorer.js", "/selection.js", "/explorer.css",
+STATIC_FILES = {"/", "/app.js", "/preview.js", "/audio-compat.js", "/style.css", "/explorer.js", "/selection.js", "/explorer.css",
                 "/vendor/mpegts-1.8.2.min.js", "/vendor/mpegts-LICENSE", "/vendor/mpegts.js.LICENSE.txt",
                 "/vendor/es6-promise-LICENSE", "/vendor/events-LICENSE"}
 
@@ -39,7 +40,9 @@ STATIC_FILES = {"/", "/app.js", "/preview.js", "/style.css", "/explorer.js", "/s
 def file_mime(path, fd=None):
     # Keep media responses consistent across Linux distributions and macOS.
     extension = Path(path).suffix[1:].lower()
-    if extension == "ts" and fd is not None and stat.S_ISREG(os.fstat(fd).st_mode):
+    if extension == "f4v" and fd is not None and stat.S_ISREG(os.fstat(fd).st_mode) and os.pread(fd, 3, 0) == b"FLV":
+        return "video/x-flv"
+    if extension in {"ts", "mts"} and fd is not None and stat.S_ISREG(os.fstat(fd).st_mode):
         # .ts also names TypeScript sources. Only classify transport packets as video.
         sample = os.pread(fd, 1024, 0)
         transport = any(sample[offset] == sample[offset + size] == sample[offset + 2 * size] == 0x47
@@ -75,6 +78,7 @@ class Server(ThreadingHTTPServer):
     def __init__(self, address, engine):
         self.engine = engine
         self.queries = Queries(engine)
+        self.media = AudioCompatibility(engine)
         self.password = Path(engine.config["password_file"]).read_text().strip()
         if len(self.password) < 12:
             raise ValueError("登录密码至少需要 12 个字符")
@@ -96,6 +100,7 @@ class Server(ThreadingHTTPServer):
             raise
 
     def server_close(self):
+        self.media.close()
         super().server_close()
         self.queries.close()
 
@@ -121,7 +126,10 @@ class Handler(BaseHTTPRequestHandler):
     def _headers(self, code, content_type, length, extra=None):
         self.send_response(code)
         self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(length))
+        if length is not None:
+            self.send_header("Content-Length", str(length))
+        else:
+            self.send_header("Connection", "close")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("Cache-Control", "no-store")
@@ -180,7 +188,12 @@ class Handler(BaseHTTPRequestHandler):
                 multi = "sources" in engine.config
                 return self._json(200, {**engine.status(), "version": __version__, "api_version": 2 if multi else API_VERSION,
                                         "min_client_api_version": 2 if multi else MIN_CLIENT_API_VERSION,
-                                        "capabilities": CAPABILITIES + (["multiple-sources"] if multi else [])})
+                                        "capabilities": CAPABILITIES + (["multiple-sources"] if multi else []) + (["audio-compatibility"] if self.server.media.available else []),
+                                        "media": {"audio_compatibility": self.server.media.available}})
+            if url.path == "/api/media/info":
+                return self._json(200, self.server.media.info(arg("path")))
+            if url.path == "/api/media/stream":
+                return self._media_stream(arg("path"), arg("start", "0"), arg("version"))
             if url.path == "/api/directories":
                 return self._json(200, self.server.queries.directories(arg("scope"), arg("offset", "0")))
             if url.path == "/api/search":
@@ -203,6 +216,8 @@ class Handler(BaseHTTPRequestHandler):
             if url.path == "/api/file":
                 return self._file(arg("path"), arg("download") == "1")
             self._json(404, {"error": "页面不存在"})
+        except MediaError as exc:
+            self._json(exc.status, {"error": str(exc)})
         except (BrokenPipeError, ConnectionResetError, TimeoutError):
             pass
         except (ValueError, PermissionError) as exc:
@@ -280,6 +295,33 @@ class Handler(BaseHTTPRequestHandler):
                              "mime": file_mime(path, fd)})
         finally:
             os.close(fd)
+
+    def _media_stream(self, path, start, version):
+        if self.command == "HEAD":
+            return self._json(405, {"error": "请使用播放请求"})
+        if self.headers.get("Range"):
+            return self._json(416, {"error": "兼容播放请按时间定位"})
+        sent = False
+        try:
+            with self.server.media.stream(path, start, version) as (info, chunks):
+                first = next(chunks, None)
+                if first is None:
+                    raise MediaError("视频没有可播放的内容")
+                self.close_connection = True
+                self._headers(200, "video/mp4", None, {"X-Media-Duration": info["duration"]})
+                sent = True
+                self.wfile.write(first)
+                for chunk in chunks:
+                    self.wfile.write(chunk)
+        except MediaError:
+            if not sent:
+                raise
+            # A streamed MP4 cannot be followed by an error JSON response.
+            self.close_connection = True
+        except (OSError, ValueError):
+            if not sent:
+                raise
+            self.close_connection = True
 
     def _preview(self, path):
         fd = self.server.engine.scope.open(path)

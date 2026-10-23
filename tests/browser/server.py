@@ -52,6 +52,13 @@ def generate(root):
         ffmpeg("-i", video, "-c", "copy", *extra, root / ("示例 片段." + extension))
     ffmpeg("-stream_loop", "3", "-i", video, "-c", "copy", "-flvflags", "add_keyframe_index", root / "长视频.flv")
     shutil.copyfile(video, root / "示例 片段.f4v")
+    shutil.copyfile(root / "示例 片段.flv", root / "FLV封装.f4v")
+    for codec, name in [('ac3','AC3'),('eac3','EAC3'),('dca','DTS'),('truehd','TrueHD')]:
+        ffmpeg('-i',video,'-c:v','copy','-c:a',codec,'-strict','-2',root / ('兼容 '+name+'.mkv'))
+    ffmpeg('-stream_loop','3','-i',video,'-c:v','copy','-c:a','ac3',root / '长视频 AC3.mkv')
+    ffmpeg('-i',root / '兼容 AC3.mkv','-c','copy','-f','mpegts',root / '兼容 AC3.m2ts')
+    ffmpeg('-i',video,'-t','8','-c:v','libx265','-preset','ultrafast','-pix_fmt','yuv420p10le',
+           '-x265-params','log-level=error:pools=1','-c:a','ac3',root / '兼容 HEVC.mkv')
     shutil.copyfile(root / "示例 片段.ts", root / "示例 片段.mts")
     # Exercise 192-byte transport packets while preserving the H.264 / AAC tracks.
     transport = (root / "示例 片段.ts").read_bytes()
@@ -90,7 +97,8 @@ if __name__ == "__main__":
         password = base / "password"
         password.write_text("browser-test-password")
         config = {"root": str(root), "unc_prefix": r"\\fixture\files", "password_file": str(password),
-                  "allowed_networks": ["127.0.0.0/8"], "require_mount": False, "exclude_names": [], "exclude_paths": []}
+                  "allowed_networks": ["127.0.0.0/8"], "require_mount": False, "exclude_names": [], "exclude_paths": [],
+                  "audio_compatibility": True}
         engine = SimpleNamespace(config=config, state=state, scope=Scope(config),
                                  status=lambda: {"available": True, "entries": len(list(root.iterdir())), "unc_prefix": config["unc_prefix"]})
         server = Server(("127.0.0.1", 0), engine)

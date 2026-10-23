@@ -60,7 +60,7 @@ def validate(config):
     for key in ("exclude_names", "exclude_paths"):
         if key in config and (not isinstance(config[key], list) or any(not isinstance(p, str) or not p or "\0" in p for p in config[key])):
             raise ValueError(f"{key} 必须是目录字符串列表")
-    for key in ("require_mount", "prune_bind_mounts"):
+    for key in ("require_mount", "prune_bind_mounts", "audio_compatibility"):
         if key in config and type(config[key]) is not bool:
             raise ValueError(f"{key} 必须是布尔值")
     for key in ("update_interval", "debounce_seconds", "reconcile_interval", "query_timeout", "scan_timeout"):

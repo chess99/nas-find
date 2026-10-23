@@ -17,7 +17,7 @@ from pathlib import Path
 from .sources import query_indexes
 
 CATEGORIES = {
-    "video": "mp4 mkv avi mov webm m4v mpg mpeg wmv flv mts m2ts vob ogv 3gp",
+    "video": "mp4 mkv avi mov webm m4v mpg mpeg wmv flv f4v rm rmvb mts m2ts vob ogv 3gp",
     "audio": "mp3 flac wav aac m4a ogg opus wma aiff ape alac mid midi",
     "image": "jpg jpeg png webp gif heic heif avif bmp tif tiff svg ico raw dng",
     "document": "pdf doc docx xls xlsx ppt pptx txt md rtf odt ods odp epub mobi csv",
