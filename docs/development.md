@@ -24,6 +24,7 @@ Linux 本地目录 → inotify 变化通知 → plocate 索引
 | `nasfind/queries.py` | 分类筛选、临时 SQLite 查询快照和批量路径读取 |
 | `nasfind/web.py` | HTTP、登录、文件预览、下载和查询接口 |
 | `nasfind/static/` | 网页入口及两端共用的列表、选择逻辑和样式 |
+| `nasfind/static/preview.js`、`vendor/` | 网页预览生命周期、原生媒体播放与按需加载的 FLV / MPEG-TS 封装适配 |
 | `desktop/src/` | 桌面页面与 Tauri 适配层 |
 | `desktop/src-tauri/src/` | 连接、平台路径、系统操作和批量导出 |
 | `desktop/src/file-menu.js`、`desktop/src-tauri/src/system_menu_macos.rs`、`file_menu_macos.m` | macOS 文件菜单适配、SMB 校验及 AppKit 原生菜单与系统服务 |
@@ -270,12 +271,26 @@ python3 -m unittest discover -s tests -v
 
 两端前端测试执行 `npm test`，Windows Rust 测试执行 `build.ps1 test`，macOS 执行 `./build.sh test`。Mac 的忽略测试可用明确的 `NAS_FIND_ACCESS_FILE` 加 `cargo test --manifest-path src-tauri/Cargo.toml -- --ignored` 执行，包含真实 NAS/SMB 检查与可删除的钥匙串测试凭据。没有 Linux 工具环境时，Python 集成测试会跳过。
 
+网页播放的独立 HTTP 测试位于 `tests/test_media.py`，不依赖 plocate。浏览器测试使用 Python 3、Node.js 22 及以上和测试机上的 FFmpeg 生成合成媒体，运行真实 HTTP 登录、文件读取和播放器；测试机的 FFmpeg 仅用于生成样本，产品运行不需要安装。执行：
+
+```sh
+npm ci --prefix tests/browser
+cd tests/browser
+npx playwright install chromium
+npm test
+# 使用本机已安装的 Chrome：
+BROWSER_CHANNEL=chrome npm test
+```
+
+浏览器测试覆盖原生播放、画面与声音解码、FLV 跨缓冲区跳转和 Range 请求、188/192 字节 TS 封装、缓冲片段内跳转、加载适配库失败后的重试、超时与登录失效、关闭释放，以及手机横竖屏操作区。截图输出到被忽略的 `.local/media-preview/`。Docker 工作流同时运行网页播放检查；第三方播放脚本及许可说明见 `nasfind/static/vendor/README.md`。
+
 | 改动 | 重点验证 |
 |---|---|
 | 索引与监听 | 创建、移动、删除、无变化时不更新、溢出恢复、失败保留旧索引 |
 | 查询与列表 | 名称 / 路径区别、分类、超过一页、末页、跨页选择、过期与会话隔离 |
 | 批量操作 | 数量与顺序完整、特殊名称、大小上限、取消后没有半成品 |
 | 原生操作 | 中文及空格路径、UNC / 映射盘 / SMB 挂载、挂载来源不匹配、单选与多选边界、错误提示 |
+| 网页预览 | 原生与封装适配播放、画面和声音、缓冲内外跳转、关闭请求、下载、失败恢复、手机横竖屏 |
 | 文档 | 相对链接、命令与当前代码是否一致、是否残留真实环境信息 |
 
 真实部署验证使用明确授权的目标与自有测试数据。NAS 冒烟测试通过 `NAS_FIND_ACCESS_FILE` 读取私有连接文件中的 `client_config`；也可通过 `NAS_FIND_CLIENT_CONFIG` 指向独立的[客户端配置](../examples/client-config.json)。系统菜单测试另需 `NAS_MENU_TEST_PATH`，可用 `NAS_MENU_EXPECT_LABEL` 指定预期应用菜单文字，不假设已安装某个播放器。

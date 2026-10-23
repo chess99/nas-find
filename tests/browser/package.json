@@ -1,0 +1,7 @@
+{
+  "name": "nas-find-web-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {"test": "node --test preview.test.mjs"},
+  "devDependencies": {"playwright": "1.62.1"}
+}

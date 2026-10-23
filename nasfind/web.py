@@ -21,6 +21,32 @@ LOG = logging.getLogger(__name__)
 STATIC = Path(__file__).parent / "static"
 SAFE_INLINE = {"application/pdf", "image/png", "image/jpeg", "image/gif", "image/webp", "image/avif",
                "video/mp4", "video/webm", "audio/mpeg", "audio/ogg", "audio/wav", "audio/flac", "audio/mp4"}
+MEDIA_TYPES = {
+    "mp4": "video/mp4", "m4v": "video/mp4", "webm": "video/webm", "mkv": "video/x-matroska",
+    "mov": "video/quicktime", "avi": "video/x-msvideo", "wmv": "video/x-ms-wmv",
+    "mpg": "video/mpeg", "mpeg": "video/mpeg", "vob": "video/mpeg", "ogv": "video/ogg",
+    "3gp": "video/3gpp", "flv": "video/x-flv", "f4v": "video/mp4",
+    "ts": "video/mp2t", "mts": "video/mp2t", "m2ts": "video/mp2t",
+    "mp3": "audio/mpeg", "m4a": "audio/mp4", "aac": "audio/aac", "flac": "audio/flac",
+    "wav": "audio/wav", "ogg": "audio/ogg", "opus": "audio/ogg", "aif": "audio/aiff", "aiff": "audio/aiff",
+}
+SAFE_INLINE.update(MEDIA_TYPES.values())
+STATIC_FILES = {"/", "/app.js", "/preview.js", "/style.css", "/explorer.js", "/selection.js", "/explorer.css",
+                "/vendor/mpegts-1.8.2.min.js", "/vendor/mpegts-LICENSE", "/vendor/mpegts.js.LICENSE.txt",
+                "/vendor/es6-promise-LICENSE", "/vendor/events-LICENSE"}
+
+
+def file_mime(path, fd=None):
+    # Keep media responses consistent across Linux distributions and macOS.
+    extension = Path(path).suffix[1:].lower()
+    if extension == "ts" and fd is not None and stat.S_ISREG(os.fstat(fd).st_mode):
+        # .ts also names TypeScript sources. Only classify transport packets as video.
+        sample = os.pread(fd, 1024, 0)
+        transport = any(sample[offset] == sample[offset + size] == sample[offset + 2 * size] == 0x47
+                        for size in (188, 192, 204) for offset in range(max(0, len(sample) - 2 * size)))
+        if not transport:
+            return "application/octet-stream" if b"\0" in sample else "text/plain"
+    return MEDIA_TYPES.get(extension) or mimetypes.guess_type(path)[0] or "application/octet-stream"
 
 
 def byte_range(value, size):
@@ -99,7 +125,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; media-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'; form-action 'self'")
+        self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; media-src 'self' blob:; frame-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'; form-action 'self'")
         for key, value in (extra or {}).items():
             self.send_header(key, str(value))
         self.end_headers()
@@ -139,10 +165,11 @@ class Handler(BaseHTTPRequestHandler):
             url = urlsplit(self.path)
             params = parse_qs(url.query, keep_blank_values=True)
             arg = lambda key, default="": params.get(key, [default])[0]
-            if url.path in ("/", "/app.js", "/style.css", "/explorer.js", "/selection.js", "/explorer.css"):
+            if url.path in STATIC_FILES:
                 name = "index.html" if url.path == "/" else url.path[1:]
                 body = (STATIC / name).read_bytes()
-                self._headers(200, ("text/javascript" if name.endswith(".js") else "text/css" if name.endswith(".css") else "text/html") + "; charset=utf-8", len(body))
+                mime = "text/javascript" if name.endswith(".js") else "text/css" if name.endswith(".css") else "text/html" if name == "index.html" else "text/plain"
+                self._headers(200, mime + "; charset=utf-8", len(body))
                 if self.command != "HEAD":
                     self.wfile.write(body)
                 return
@@ -250,7 +277,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"size": info.st_size, "modified": info.st_mtime,
                              "version": f"{info.st_size}:{info.st_mtime_ns}",
                              "directory": stat.S_ISDIR(info.st_mode),
-                             "mime": mimetypes.guess_type(path)[0] or "application/octet-stream"})
+                             "mime": file_mime(path, fd)})
         finally:
             os.close(fd)
 
@@ -282,7 +309,7 @@ class Handler(BaseHTTPRequestHandler):
                 start, end, partial = byte_range(self.headers.get("Range"), info.st_size)
             except ValueError:
                 return self._json(416, {"error": "请求范围无效"}, {"Content-Range": f"bytes */{info.st_size}"})
-            mime = mimetypes.guess_type(path)[0] or "application/octet-stream"
+            mime = file_mime(path, file.fileno())
             disposition = "attachment" if download or mime not in SAFE_INLINE else "inline"
             headers = {"Accept-Ranges": "bytes", "Content-Disposition": f"{disposition}; filename*=UTF-8''{quote(path.rsplit('/', 1)[-1], safe='')}"}
             if partial:

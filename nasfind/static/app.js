@@ -1,10 +1,12 @@
 import {Explorer,uncPath} from './explorer.js';
-const $=id=>document.getElementById(id);let toastTimer,connected=false,previewVersion=0,shareRoot='',sources=[],previewController=null;
+import {FilePreview} from './preview.js';
+const $=id=>document.getElementById(id);let toastTimer,connected=false,shareRoot='',sources=[];
 function toast(text){clearTimeout(toastTimer);$('toast').textContent=text;$('toast').hidden=false;toastTimer=setTimeout(()=>$('toast').hidden=true,4000);}
-async function api(path,options={}){const response=await fetch(path,options);const value=await response.json();if(response.status===401){connected=false;explorer.setConnected(false);if(!$('login').open)$('login').showModal();}if(!response.ok)throw Error(value.error||'请求失败');return value;}
+async function api(path,options={}){const response=await fetch(path,options);const value=await response.json();if(response.status===401){connected=false;explorer.setConnected(false);filePreview.close();if(!$('login').open)$('login').showModal();}if(!response.ok)throw Object.assign(Error(value.error||'请求失败'),{status:response.status});return value;}
 const post=(path,value,signal)=>api(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(value),signal});
 const jobs=new Map();let nextJob=0;
-async function clipboard(text){if(navigator.clipboard){await navigator.clipboard.writeText(text);return;}const area=document.createElement('textarea');area.value=text;document.body.append(area);area.select();const ok=document.execCommand('copy');area.remove();if(!ok)throw Error('浏览器拒绝剪贴板写入，请使用导出路径清单');}
+async function clipboard(text){if(navigator.clipboard){await navigator.clipboard.writeText(text);return;}const area=document.createElement('textarea'),focused=document.activeElement;area.value=text;area.className='clipboard-buffer';(document.querySelector('dialog[open]')||document.body).append(area);try{area.select();if(!document.execCommand('copy'))throw Error('浏览器拒绝剪贴板写入，请使用导出路径清单');}finally{area.remove();focused?.focus({preventScroll:true});}}
+const filePreview=new FilePreview($('preview'),{api,copy:async file=>{await clipboard(uncPath(file.path,shareRoot,sources));toast('已复制路径');},notify:toast});
 async function transfer(job,request){
   let cursor=0,text='',bytes=2;
   try{
@@ -24,48 +26,10 @@ const explorer=new Explorer($('explorer'),{
   create:options=>post('/api/query',options),page:(id,offset)=>api('/api/query?'+new URLSearchParams({id,offset})),cancel:id=>post('/api/query/cancel',{id}),notify:toast,
   startBulk:async request=>{const id=String(++nextJob),job={running:true,processed:0,total:0,controller:new AbortController()};jobs.clear();jobs.set(id,job);transfer(job,{...request,root:shareRoot,sources});return{id};},
   bulkStatus:async id=>jobs.get(id),cancelBulk:async id=>{const job=jobs.get(id);job.cancelled=true;job.controller.abort();},
-  action:async(file,action)=>{if(file.directory){explorer.setScope(file.path);explorer.$('query').value='';explorer.search();return;}if(action==='copy_file'||action==='reveal'||action==='open_with'){toast('直接使用系统文件操作，请打开桌面客户端');return;}await preview(file);}
+  action:async(file,action)=>{if(file.directory){explorer.setScope(file.path);explorer.$('query').value='';explorer.search();return;}if(action==='copy_file'||action==='reveal'||action==='open_with'){toast('直接使用系统文件操作，请打开桌面客户端');return;}await filePreview.show(file);}
 });
 async function status(){try{const value=await api('/api/status');shareRoot=value.unc_prefix;sources=value.sources||[];explorer.setSources(sources);$('product-version').textContent=value.version?'v'+value.version:'';$('status').textContent='已连接 NAS';$('index-status').title=value.error||'';$('index-status').textContent=`${Number(value.entries||0).toLocaleString()} 个索引条目 · ${value.error?'部分索引异常':!value.available?'首次索引未完成':value.partial?'部分共享正在建立索引':value.scanning?'正在更新':value.dirty?'有待更新变化':'索引已就绪'}`;if(!connected){connected=true;explorer.setConnected(true);$('login').close();explorer.search();}}catch(e){if(connected)toast(e.message);}}
 $('login-form').onsubmit=async e=>{e.preventDefault();try{await post('/api/login',{password:$('password').value});$('password').value='';await status();}catch(e){$('login-error').textContent=e.message;}};
-$('logout').onclick=async()=>{try{await post('/api/logout',{});connected=false;explorer.setConnected(false);$('login').showModal();}catch(e){toast(e.message);}};
+$('logout').onclick=async()=>{try{await post('/api/logout',{});filePreview.close();connected=false;explorer.setConnected(false);$('login').showModal();}catch(e){toast(e.message);}};
 $('refresh').onclick=async()=>{try{await post('/api/refresh',{});toast('已安排索引更新');}catch(e){toast(e.message);}};
-async function preview(file){
-  previewController?.abort();previewController=new AbortController();
-  const version=++previewVersion,signal=previewController.signal,params=new URLSearchParams({path:file.path});
-  const current=()=>version===previewVersion;
-  $('preview-title').textContent=file.name;$('preview-path').textContent=file.path;$('file-meta').textContent='';
-  $('download').href='/api/file?'+params+'&download=1';
-  const state=document.createElement('p');state.setAttribute('role','status');state.className='preview-state';state.textContent='正在连接…';
-  $('preview-content').replaceChildren(state);$('preview').showModal();
-  try{
-    const info=await api('/api/info?'+params,{signal});if(!current())return;
-    $('file-meta').textContent=`${(info.size/1024/1024>=1?(info.size/1024/1024).toFixed(1)+' MB':Math.ceil(info.size/1024)+' KB')} · ${new Date(info.modified*1000).toLocaleString()}`;
-    let element;
-    if(['image/png','image/jpeg','image/webp','image/gif','image/avif'].includes(info.mime))element=document.createElement('img');
-    else if(info.mime.startsWith('video/')||info.mime.startsWith('audio/')){
-      element=document.createElement(info.mime.startsWith('video/')?'video':'audio');element.controls=true;element.preload='metadata';
-      if(!element.canPlayType(info.mime)){state.textContent='浏览器不支持此格式，请下载后打开';return;}
-      element.addEventListener('waiting',()=>{if(current()){state.hidden=false;state.textContent='正在缓冲…';}});
-      element.addEventListener('stalled',()=>{if(current()){state.hidden=false;state.textContent='读取较慢，可稍后重试或下载文件';}});
-      element.addEventListener('playing',()=>{state.hidden=true;});
-      element.addEventListener('loadedmetadata',()=>{state.hidden=true;});
-    } else if(info.mime==='application/pdf'){element=document.createElement('iframe');element.title=file.name;}
-    if(element){
-      state.textContent='正在加载…';
-      element.addEventListener('load',()=>{state.hidden=true;});
-      element.addEventListener('error',()=>{if(current()){state.hidden=false;state.textContent='无法预览此文件，可重试或下载后打开';}});
-      if(element.tagName==='IMG')element.alt=file.name;
-      element.src='/api/file?'+params;$('preview-content').replaceChildren(state,element);
-    } else {
-      const data=await api('/api/preview?'+params,{signal});if(!current())return;
-      element=document.createElement('pre');element.textContent=data.text===null?'此格式请下载后打开':data.text+(data.truncated?'\n——仅显示部分内容——':'');
-      $('preview-content').replaceChildren(element);
-    }
-  }catch(e){if(current()){
-    state.textContent=e.message;
-    const retry=document.createElement('button');retry.textContent='重试';retry.onclick=()=>preview(file);
-    $('preview-content').replaceChildren(state,retry);
-  }}
-}
-$('close-preview').onclick=()=>$('preview').close();$('preview').onclose=()=>{previewController?.abort();previewVersion++;$('preview-content').replaceChildren();};status();setInterval(()=>{if(connected&&!document.hidden)status();},30000);
+status();setInterval(()=>{if(connected&&!document.hidden)status();},30000);
