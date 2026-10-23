@@ -23,8 +23,10 @@ class AudioCompatibilityTests(unittest.TestCase):
         self.server.media.close()
         self.server.media = AudioCompatibility(self.server.engine)
         self.source = self.root / '中文 AC3.mkv'
+        chapters=self.base/'chapters.txt'
+        chapters.write_text(';FFMETADATA1\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=15000\ntitle=Part 1\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=15000\nEND=30000\ntitle=Part 2\n')
         subprocess.run(['ffmpeg','-v','error','-nostdin','-y','-f','lavfi','-i','testsrc2=size=160x90:rate=10',
-                        '-f','lavfi','-i','sine=frequency=440:sample_rate=48000','-map','0:v','-map','1:a',
+                        '-f','lavfi','-i','sine=frequency=440:sample_rate=48000','-f','ffmetadata','-i',str(chapters),'-map','0:v','-map','1:a','-map_chapters','2',
                         '-c:v','libx264','-preset','ultrafast','-g','10','-bf','2','-c:a','ac3','-t','30',str(self.source)],check=True)
         self.login()
 
@@ -49,9 +51,12 @@ class AudioCompatibilityTests(unittest.TestCase):
             self.assertEqual(response.headers['Content-Type'],'video/mp4')
             converted = self.base / 'converted.mp4'
             converted.write_bytes(response.read())
-        data = json.loads(subprocess.check_output(['ffprobe','-v','error','-show_entries','stream=codec_name,channels','-of','json',str(converted)],text=True))
+        data = json.loads(subprocess.check_output(['ffprobe','-v','error','-show_entries','stream=codec_name,channels:chapter=id','-of','json',str(converted)],text=True))
         self.assertEqual([s['codec_name'] for s in data['streams']],['h264','aac'])
         self.assertEqual(data['streams'][1]['channels'],2)
+        self.assertEqual(data.get('chapters',[]),[])
+        original=json.loads(subprocess.check_output(['ffprobe','-v','error','-show_entries','chapter=id','-of','json',str(self.source)],text=True))
+        self.assertEqual(len(original['chapters']),2)
         self.assertEqual(self.frame_hashes(self.source),self.frame_hashes(converted))
 
     def test_seek_preserves_fragment_timestamps(self):

@@ -52,11 +52,9 @@ class AudioCompatibility:
 
     def _finish(self, process):
         if process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                process.kill()
+            # Inputs are read-only and output is disposable. SIGTERM may remain
+            # blocked behind a full output pipe, delaying a seek's replacement.
+            process.kill()
         process.wait()
         if process.stdout:
             process.stdout.close()
@@ -173,8 +171,9 @@ class AudioCompatibility:
             with tempfile.TemporaryFile() as errors:
                 command = [self.ffmpeg, "-v", "error", "-nostdin", "-threads", "1", "-copyts", "-start_at_zero",
                            "-ss", f"{position:.6f}", "-protocol_whitelist", "file,pipe", "-format_whitelist", self.FORMATS,
+                           "-probesize", "2097152", "-analyzeduration", "2000000", "-sn", "-dn",
                            "-i", self.descriptor(fd), "-map", f"0:{info['video_stream']}", "-map", f"0:{info['audio_stream']}",
-                           "-sn", "-dn", "-map_metadata", "-1", "-c:v", "copy", "-c:a", "aac", "-threads:a", "1",
+                           "-sn", "-dn", "-map_metadata", "-1", "-map_chapters", "-1", "-c:v", "copy", "-c:a", "aac", "-threads:a", "1",
                            "-ac", "2", "-b:a", "160k", "-avoid_negative_ts", "disabled",
                            "-movflags", "+frag_keyframe+delay_moov+default_base_moof+frag_discont", "-frag_duration", "1000000"]
                 if info["video_codec"] == "hevc":
