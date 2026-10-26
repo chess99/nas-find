@@ -16,8 +16,8 @@ android {
         applicationId = "net.chess99.nasfind"
         minSdk = 26
         targetSdk = 34
-        versionCode = 6
-        versionName = "0.7.0-rc.2"
+        versionCode = 7
+        versionName = "0.7.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     signingConfigs {
